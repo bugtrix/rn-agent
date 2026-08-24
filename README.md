@@ -8,11 +8,12 @@ your git state. It is built for real production apps — the ones with 100+
 dependencies, 35 native modules, a Gradle `ext` block and a Podfile you did not
 write yourself.
 
-> **Status: Phase 2.** `scan`, `health` and the AI setup commands (`login`,
-> `logout`, `whoami`, `provider`, `model`) are implemented, tested and usable
-> today. `review`, `fix`, `feature`, `test`, `upgrade` and `migrate` land in
-> later phases (see [Roadmap](#roadmap)). Nothing in this repository fakes an
-> AI response or pretends a command exists before it works.
+> **Status: complete through phase 6.** Every command on the roadmap is
+> implemented, tested and usable today: `scan`, `health`, `info`, the AI setup
+> commands (`login`, `logout`, `whoami`, `provider`, `model`), the development
+> commands (`review`, `fix`, `feature`, `test`), and the maintenance commands
+> (`upgrade`, `migrate`, `compatibility`, `docs`, `release`). Nothing in this
+> repository fakes an AI response or pretends a command exists before it works.
 
 ---
 
@@ -47,16 +48,19 @@ rn-agent whoami
 5. [rn-agent scan](#rn-agent-scan)
 6. [rn-agent health](#rn-agent-health)
 7. [Setting up AI](#setting-up-ai)
-8. [Configuration](#configuration)
-9. [The shared project brain](#the-shared-project-brain)
-10. [Architecture](#architecture)
-11. [Security](#security)
-12. [Safety](#safety)
-13. [Logs and state](#logs-and-state)
-14. [Development](#development)
-15. [Testing](#testing)
-16. [Troubleshooting](#troubleshooting)
-17. [Roadmap](#roadmap)
+8. [Daily development: review, fix, feature, test](#daily-development)
+9. [Maintenance: upgrade, compatibility, migrate](#maintenance)
+10. [Shipping: docs and release](#shipping)
+11. [Configuration](#configuration)
+12. [The shared project brain](#the-shared-project-brain)
+13. [Architecture](#architecture)
+14. [Security](#security)
+15. [Safety](#safety)
+16. [Logs and state](#logs-and-state)
+17. [Development](#development)
+18. [Testing](#testing)
+19. [Troubleshooting](#troubleshooting)
+20. [Roadmap](#roadmap)
 
 ---
 
@@ -145,9 +149,15 @@ rn-agent --version
 | `rn-agent info` | ✅ Phase 1 | Show where state lives and what has been scanned |
 | `rn-agent login` / `logout` / `whoami` | ✅ Phase 2 | Connect *your* AI account; the key goes to your OS keychain |
 | `rn-agent provider` / `model` | ✅ Phase 2 | Choose the provider, the model, and per-task models |
-| `rn-agent review` / `fix` / `feature` / `test` | ⏳ Phase 3 | Daily development work |
-| `rn-agent upgrade` | ⏳ Phase 4 | Risk-ranked dependency upgrades |
-| `rn-agent migrate` | ⏳ Phase 5 | React Native version migration from the official docs |
+| `rn-agent review` | ✅ Phase 3 | Analyse components, hooks, state and performance with your model |
+| `rn-agent fix` | ✅ Phase 3 | Fix what `health`/`review` reported, then prove the project still builds |
+| `rn-agent feature` | ✅ Phase 3 | Implement a feature following your existing architecture |
+| `rn-agent test` | ✅ Phase 3 | Generate tests for your code and run them |
+| `rn-agent upgrade` | ✅ Phase 4 | Risk-ranked dependency upgrades, with peer and native analysis |
+| `rn-agent migrate` | ✅ Phase 5 | React Native version migration from the upstream template diff |
+| `rn-agent compatibility` | ✅ Phase 6 | Check the project against a React Native version before migrating |
+| `rn-agent docs` | ✅ Phase 6 | Write project documentation from the scanned facts |
+| `rn-agent release` | ✅ Phase 6 | Bump every version an app carries, and write the changelog |
 
 Global flags:
 
@@ -379,6 +389,161 @@ never build a provider.
 
 ---
 
+## Daily development
+
+These four commands use your model. They all follow the same contract: you see
+what is proposed, your `rules.yaml` can refuse it, the change is applied through
+the same writer as everything else, and if the project stops building the whole
+change is rolled back.
+
+```bash
+rn-agent review                          # review the code most likely to matter
+rn-agent review --changed                # only what git says you touched
+rn-agent review --area hooks --area performance
+rn-agent review --fail-under 80          # CI gate, same scoring as `health`
+
+rn-agent fix --issue js.typecheck        # fix a finding by id, from health/review
+rn-agent fix --about "the orders list re-renders on every keystroke"
+rn-agent fix --file src/screens/Orders.tsx --check typecheck --check tests
+
+rn-agent feature "add pull-to-refresh on the orders list"
+rn-agent test src/screens/OrdersScreen.tsx
+```
+
+**How a fix is kept honest**
+
+1. Only files you allowed are sent to the model — secrets are excluded and the
+   list is printed with `--verbose`.
+2. The reply must be complete file contents. No diffs, no `// ...unchanged`.
+3. `rules.yaml` is enforced *before* writing: `package.json`, lockfiles and
+   native files are refused unless you pass `--allow-deps` / `--allow-native`.
+4. Non-low-risk changes ask for confirmation (or `-y`), and the previous bytes
+   are backed up.
+5. `tsc` and your test script run afterwards. If they fail, every file is
+   restored byte-for-byte — `--keep` opts out.
+
+`--json` gives the whole run as machine-readable output, and every run leaves a
+report in `.rn-agent/cache/<command>-report.json`.
+
+Findings connect the commands: `health` and `review` record ids in the knowledge
+store, and `fix --issue <id>` reads them back. You never paste an error message.
+
+```
+Proposed (1)
+  low  Memoise the row renderer  fix-orders-rerender
+      the callback was recreated on every keystroke
+      ~ src/screens/OrdersScreen.tsx
+
+Changed (1)
+  ✓ src/screens/OrdersScreen.tsx
+  backups written to .rn-agent/cache/backups/
+
+Validation
+  ✓ typecheck  passed
+  ✓ tests      passed
+```
+
+`rn-agent test` may only write test files. A proposal that touches production
+code is refused, and generated tests that fail are rolled back — a red test
+nobody trusts is worse than no test.
+
+---
+
+## Maintenance
+
+### rn-agent compatibility
+
+Run this *before* a migration. It answers one question — can this project run on
+that React Native version? — and refuses to guess.
+
+```bash
+rn-agent compatibility                 # against the newest published RN
+rn-agent compatibility --target 0.82.1
+rn-agent compatibility --offline       # installed metadata + bundled table only
+```
+
+Requirements come from the target's own `peerDependencies` and `engines`; when
+the registry is unreachable the bundled table is used **and labelled**. Every row
+is `ok`, `conflict` or `unknown`, and unknowns never block — Gradle/AGP numbers
+for a version you have not installed are genuinely not knowable locally, so they
+are reported as unknown with your current value shown. Exit code is `1` when
+there is a conflict.
+
+### rn-agent upgrade
+
+Deterministic: no model is involved in the decision.
+
+```bash
+rn-agent upgrade                       # minor upgrades, the default
+rn-agent upgrade --target patch
+rn-agent upgrade --target latest --only lodash --only axios
+rn-agent upgrade --native              # include packages with native code
+rn-agent upgrade --offline             # report drift without contacting npm
+```
+
+* `react-native` and `react` are always blocked, pointing at `rn-agent migrate`
+  — a React Native bump is a migration, not a range rewrite.
+* A peer conflict blocks the candidate and is listed. An *undecidable* range
+  (`workspace:*`, a git URL) is a note, never an invented conflict.
+* Native packages need a pod install and a rebuild, so they rank higher and are
+  excluded unless you ask.
+* `package.json` is rewritten (keeping your `^`/`~` and your indentation), your
+  package manager installs, then `tsc`/tests run — and a failure restores the
+  manifest.
+
+### rn-agent migrate
+
+```bash
+rn-agent migrate                       # to the newest published version
+rn-agent migrate --to 0.82.1
+rn-agent migrate --skip-native         # JS and dependencies only
+rn-agent migrate --build               # also run the Android/iOS builds
+rn-agent migrate --offline --no-ai
+```
+
+What happens, in order: a branch (`rn-agent/migrate-0.82.1`), `package.json`
+updated from the target's own requirements, the upstream template diff applied
+per file, install, `pod install`, typecheck, tests — and, if that fails and AI is
+configured, **one** repair round before the whole migration is rolled back.
+
+Diffs are applied strictly. A hunk lands only when its context matches exactly;
+anything drifted becomes a reported conflict with the hunk attached, never a
+fuzzy patch. Files you customised or deleted become manual steps. Every attempt —
+including a rolled-back one — is recorded in `.rn-agent/migration-history.json`.
+
+Local, exact edits can be pinned in `migration-rules/*.yaml` (see that
+directory's README); the loader is version-matched and skips any action this
+version does not implement.
+
+---
+
+## Shipping
+
+```bash
+rn-agent docs                          # writes docs/PROJECT.md from the facts
+rn-agent docs --section architecture --section setup -o ARCHITECTURE.md
+
+rn-agent release --bump minor          # every version an app carries
+rn-agent release --version 2.0.0 --no-changelog
+rn-agent --dry-run release             # see the plan first
+```
+
+`docs` may write exactly the file you named — an edit anywhere else is refused —
+and it updates in place rather than replacing prose you wrote.
+
+`release` finds every place a version lives: `package.json`,
+`android/app/build.gradle` (`versionName` **and** `versionCode`) and the Xcode
+project (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`). A field it cannot find
+is reported, so a platform is never silently left behind. A dirty tree, no
+commits since the last tag, or a critical finding in your last `health` report
+block the release (`--force` overrides).
+
+It does not commit, tag, push or upload. `GitManager` implements no
+history-writing operation and this command does not add one — the git commands
+are printed as a checklist for you to run.
+
+---
+
 ## Configuration
 
 `rn-agent scan` creates `.rn-agent/config.yaml`. It is safe to commit: it holds
@@ -490,24 +655,32 @@ FileManager    CommandRunner   SafetyManager  CredentialStore
 
 ```
 src/rn_agent/
-├── cli/            Typer app + Rich UI primitives + AI setup commands
+├── cli/            Typer app, Rich UI, shared runtime + 3 command groups
 ├── core/           AgentContext, AgentCommand, registry, config, logging, paths
-├── commands/       ScanCommand, HealthCommand
-├── ai/             AIProvider + Anthropic/OpenAI/Ollama, registry, transport
+├── commands/       scan, health, review, fix, feature, test, upgrade,
+│                   migrate, compatibility, docs, release
+├── agents/         the AI work layer: rules, context budget, prompts, output
+│                   parsing, one call path, apply/rollback workflow
+├── ai/             AIProvider + Anthropic/OpenAI/Ollama, registry
 ├── auth/           keychain backends, CredentialStore, login/whoami policy
+├── net/            the one HTTP seam (JsonTransport) for every subsystem
+├── validation/     ProjectValidator: install, pods, tsc, eslint, tests, builds
+├── upgrade/        npm registry client + deterministic upgrade planner
+├── migration/      diff sources, strict diff engine, local rules, planner, history
 ├── project/        detector, packages, android, ios, architecture, scanner
 ├── analyzers/      project, react-native, javascript, android, ios
-├── models/         pydantic: project, health, config, changes
+├── models/         pydantic: project, health, config, changes, proposal,
+│                   review, upgrade, migration, compatibility, release, validation
 ├── knowledge/      SQLite store + curated offline data (YAML)
-├── git/            GitManager (no destructive operation exists in it)
-├── filesystem/     FileManager (backups, rollback), ProjectWalker
+├── git/            GitManager (no destructive or history-writing operation)
+├── filesystem/     FileManager (the only writer: backups, rollback), ProjectWalker
 ├── runner/         CommandRunner (the only place we shell out)
 ├── safety/         SafetyManager (risk, confirmation, secret filtering)
-├── reporting/      Rich renderers
+├── reporting/      Rich renderers, one per report shape
 └── utils/          semver, io, redaction
 ```
 
-Three decisions worth knowing:
+Five decisions worth knowing:
 
 **Facts before tables.** Instead of hard-coding "RN 0.81 needs React 19.1", the
 agent reads `node_modules/react-native/package.json` — `peerDependencies.react`
@@ -521,10 +694,22 @@ node-semver (`^19.1.1`, `>= 20.19.4`, `^16.8 || ^17.0 || ^18.0`,
 ranges with node's pre-release rule, and reports *undecidable* for git and
 workspace specifiers rather than guessing.
 
-**One transport, one shell-out.** Providers never touch a client library
-directly: every request goes through a `JsonTransport` (`ai/http.py`) and every
-keychain call through `CommandRunner`, so timeouts, error mapping and redaction
-exist once — and a test can hand a provider a fake transport instead of a socket.
+**One transport, one shell-out, one writer.** Every HTTP request goes through a
+`JsonTransport` (`net/http.py`) — model completions, npm registry lookups and
+upstream diffs alike; every external tool goes through `CommandRunner`; every
+byte written to your project goes through `FileManager`. Timeouts, error mapping,
+redaction, backups and rollback therefore exist exactly once, and a test can hand
+in a fake transport instead of opening a socket.
+
+**Rules are enforced, not requested.** `.rn-agent/rules.yaml` goes into every
+prompt *and* into `EditApplier.screen()`. A model that ignores "do not add
+dependencies" still cannot write `package.json`: the edit is refused by path
+before the safety gate is reached.
+
+**Apply, prove, undo.** Every write-command applies the change, runs the
+project's own checks, and restores the previous bytes when they fail. That
+ordering is only safe because the writer backed everything up first — which is
+why there is one writer.
 
 ---
 
@@ -551,7 +736,10 @@ exist once — and a test can hand a provider a fake transport instead of a sock
   `AIza…`, JWTs) are masked before anything is written to `.rn-agent/logs/` — a
   provider error that echoes your key back is masked too.
 * **No network unless you ask.** `scan` and `health` make no HTTP requests at
-  all; only `login`, `whoami --check` and `model --list --remote` do.
+  all. Only `login`, `whoami --check`, `model --list --remote`, and the commands
+  that genuinely need a remote fact do: the AI commands (your provider),
+  `upgrade`/`compatibility` (the npm registry) and `migrate` (the upstream
+  template diff). `--offline` is available on all three of the latter.
 
 ---
 
@@ -568,6 +756,16 @@ exist once — and a test can hand a provider a fake transport instead of a sock
   agent — there is no code path, and a test asserts their absence.
 * Native files (`android/`, `ios/`, `*.gradle`, `*.pbxproj`, `Podfile`) are never
   classed as low risk, so they can never be auto-applied.
+* Model-proposed edits are screened against your `rules.yaml` **before** the
+  safety gate: lockfiles are always refused, and `package.json` and native files
+  need an explicit `--allow-deps` / `--allow-native`.
+* Every write-command validates afterwards and rolls the whole change back when
+  the project stops building (`--keep` opts out).
+* `migrate` works on a branch, refuses a dirty tree, applies diff hunks only
+  when their context matches exactly, and records every attempt — including a
+  rolled-back one — in `.rn-agent/migration-history.json`.
+* `release` writes version numbers and a changelog, and **never** commits, tags
+  or pushes.
 
 ---
 
@@ -597,7 +795,7 @@ cd rn-agent
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                 # 352 tests
+pytest                 # 573 tests
 ruff check src tests   # lint
 mypy                   # types
 ```
@@ -624,13 +822,19 @@ pytest tests/test_health.py     # one area
 pytest -k semver                # one topic
 ```
 
-352 tests covering project detection, RN/React/Node version resolution, package
+573 tests covering project detection, RN/React/Node version resolution, package
 manager detection, lockfile disambiguation, architecture inference, Gradle `ext`
 indirection, Podfile/pbxproj/plist parsing, every health rule (fires *and* stays
 silent), health scoring, git safety, file backup/rollback/traversal refusal,
 safety policy, secret filtering and redaction, the SQLite store, provider request
 shapes and error mapping, every keychain backend, credential precedence, the CLI
-(exit codes, JSON, dry-run) and packaging consistency.
+(exit codes, JSON, dry-run) and packaging consistency — plus, for phases 3-6:
+the context budget and secret exclusion, model-output parsing and its refusals,
+rules enforcement, apply/validate/rollback on real bytes, the npm registry client
+and every upgrade risk rule, strict diff application (applies, conflicts,
+already-applied, ambiguous context), migration rollback and the AI repair round,
+compatibility conflict-versus-unknown, and release version discovery across
+`package.json`, Gradle and the Xcode project.
 
 Tests never touch a real project, the network, an AI provider, your user config
 or your keychain: fixtures make network calls fail loudly, redirect
@@ -659,6 +863,13 @@ provider API key.
 | `no OS keychain was reachable` | No keyring on this machine (container/CI): the key is in a `0600` file, or export the env var instead |
 | `cannot reach http://127.0.0.1:11434` | Ollama is not running — `ollama serve`, or point `--base-url` at the machine that runs it |
 | `Credential rejected` (HTTP 401) | The key was revoked or belongs to another account; `rn-agent login <provider>` again |
+| `the model did not return usable JSON` (exit 12) | The model ignored the output contract; retry, or pick a stronger one with `rn-agent model --list` |
+| `the model's answer was cut off` (exit 12) | Raise `ai.max_output_tokens`, or narrow the request (`--file`, one `--issue`) |
+| `npm registry unreachable` (exit 11) | `upgrade`/`compatibility` need the registry for target versions; retry, or use `--offline` for drift only |
+| `no published diff for X -> Y` | `migrate` could not find that upstream version pair; check both versions exist, or pin the steps in `migration-rules/` |
+| A migration step says `conflict` | Your file drifted from the template; the hunk is printed — apply it by hand, then re-run |
+| `every proposed change was refused by your rules` | Your `rules.yaml` forbids it; use `--allow-deps` / `--allow-native`, or edit the rules |
+| `release blocked` | Commit or stash first, or `--force`; the blockers are listed with their reasons |
 
 ---
 
@@ -668,10 +879,15 @@ provider API key.
 |---|---|---|
 | 1 | CLI, project scanner, shared context, git/file/runner/safety managers, config, logging, `scan`, `health` | **done** |
 | 2 | `AIProvider` abstraction, Claude/OpenAI/Ollama, `login`/`logout`/`whoami`, `provider`, `model`, task models, OS keychain | **done** |
-| 3 | `review`, `fix`, `feature`, `test` | next |
-| 4 | `upgrade` with peer/native risk analysis | planned |
-| 5 | `migrate`: official RN docs + Upgrade Helper diffs, template comparison, Android/iOS migration, build validation, AI-assisted error fixing, rollback | planned |
-| 6 | `compatibility`, `docs`, `release` | planned |
+| 3 | `review`, `fix`, `feature`, `test` | **done** |
+| 4 | `upgrade` with peer/native risk analysis | **done** |
+| 5 | `migrate`: upstream template diffs, local rules, build validation, AI-assisted error fixing, rollback | **done** |
+| 6 | `compatibility`, `docs`, `release` | **done** |
+
+Per-phase reports, with the decisions and the bugs the tests caught, live in
+[`docs/`](docs/): [phase 1](docs/phase-1.md), [phase 2](docs/phase-2.md),
+[phase 3](docs/phase-3.md), [phase 4](docs/phase-4.md),
+[phase 5](docs/phase-5.md), [phase 6](docs/phase-6.md).
 
 ## License
 

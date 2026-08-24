@@ -236,6 +236,44 @@ class AgentContext:
     def has_project_context(self) -> bool:
         return self._project_context is not None or self.paths.context_file.is_file()
 
+    def ensure_project(
+        self,
+        *,
+        refresh: bool = False,
+        probe_tools: bool = False,
+        stale_seconds: float = 24 * 60 * 60,
+    ) -> tuple[ProjectContext, bool]:
+        """The brain, rescanned when it is missing, stale or unusable.
+
+        Returns ``(project, refreshed)``. Every command past phase 1 uses this
+        rather than raising ``ProjectNotScanned``: a developer should not have to
+        remember to re-run ``scan`` before asking a question about their project,
+        and a stale answer is worse than a two-second rescan.
+        """
+        from ..project.scanner import ProjectScanner, context_age_seconds, save_context
+
+        age = context_age_seconds(self.paths)
+        stale = age is not None and age > stale_seconds
+        if not refresh and not stale and self.has_project_context():
+            try:
+                return self.project, False
+            except Exception as exc:  # a corrupt context file must not be fatal
+                self.logger.warning("stored context unusable (%s); rescanning", exc)
+
+        scanner = ProjectScanner(self.detected, self.paths, self.runner, knowledge=self.knowledge)
+        project = scanner.scan(
+            probe_tools=probe_tools,
+            git_info=self.git.describe(),
+            source_stats=self.walker.stats(),
+        )
+        self.set_project(project)
+        if not self.dry_run:
+            try:
+                save_context(self.paths, project)
+            except OSError as exc:  # pragma: no cover - read-only project
+                self.logger.warning("could not persist refreshed context: %s", exc)
+        return project, True
+
     # -- run bookkeeping ---------------------------------------------------
     def begin_run(self) -> int | None:
         if self.dry_run:

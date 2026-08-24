@@ -70,3 +70,25 @@ class ProviderError(RNAgentError):
     """AI provider configuration/authentication problem (phase 2)."""
 
     exit_code = 10
+
+
+class TransportError(RNAgentError):
+    """A request never reached its host (DNS, TLS, refused, timeout).
+
+    Raised by ``net/http.py`` for every consumer - the npm registry, the
+    upstream React Native diffs, and AI providers. Providers translate it into
+    a :class:`ProviderError` so an AI failure keeps reporting exit code 10.
+    """
+
+    exit_code = 11
+
+
+class ModelOutputError(RNAgentError):
+    """The model answered, but the answer could not be used.
+
+    A separate code from :class:`ProviderError` on purpose: the credential and
+    the endpoint are fine, the *response* is not, and the fix is different
+    (retry, a stronger model, a narrower request).
+    """
+
+    exit_code = 12

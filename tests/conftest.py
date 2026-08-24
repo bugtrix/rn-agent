@@ -18,13 +18,13 @@ from typing import Any
 
 import pytest
 
-from rn_agent.ai.http import HttpResponse
 from rn_agent.ai.registry import specs
 from rn_agent.constants import ENV_HOME, ENV_KEYCHAIN
 from rn_agent.core.context import AgentContext
 from rn_agent.core.paths import AgentPaths
 from rn_agent.knowledge.data import load_knowledge_data
 from rn_agent.models.config import AgentConfig
+from rn_agent.net.http import HttpResponse
 from rn_agent.project.detector import detect_project
 from rn_agent.runner.command_runner import CommandRunner
 
@@ -371,6 +371,36 @@ class ProjectBuilder:
             **kwargs,
         )
 
+    def scanned(self, **kwargs: Any) -> AgentContext:
+        """A context whose brain is populated, as after `rn-agent scan`.
+
+        Commands past phase 1 read ``context.project``; building it here keeps
+        every test from re-implementing the scan.
+        """
+        from rn_agent.project.scanner import ProjectScanner
+
+        context = self.context(**kwargs)
+        scanner = ProjectScanner(
+            context.detected, context.paths, context.runner, knowledge=context.knowledge
+        )
+        context.set_project(
+            scanner.scan(probe_tools=False, source_stats=context.walker.stats())
+        )
+        return context
+
+    def local_bin(self, name: str, *, exit_code: int = 0, output: str = "") -> Path:
+        """A stand-in for a locally installed node tool (``node_modules/.bin``).
+
+        The validator deliberately runs the project's own binaries, so a test
+        that needs a passing or failing check installs one of these.
+        """
+        target = self.root / "node_modules" / ".bin" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        body = f"echo {output!r}\n" if output else ""
+        target.write_text(f"#!/bin/sh\n{body}exit {exit_code}\n", encoding="utf-8")
+        target.chmod(0o755)
+        return target
+
 
 @pytest.fixture
 def builder(tmp_path: Path) -> ProjectBuilder:
@@ -480,3 +510,91 @@ def wired_transport(monkeypatch: pytest.MonkeyPatch, transport: FakeTransport) -
     """The transport every provider built without an explicit one will use."""
     monkeypatch.setattr("rn_agent.ai.provider.default_transport", lambda: transport)
     return transport
+
+
+# ---------------------------------------------------------------------------
+# AI-backed commands
+# ---------------------------------------------------------------------------
+AI_MODEL = "claude-sonnet-4-5"
+AI_KEY = "sk-ant-test-0123456789abcdef"
+
+
+def anthropic_body(
+    text: str,
+    *,
+    model: str = AI_MODEL,
+    stop_reason: str = "end_turn",
+    input_tokens: int = 120,
+    output_tokens: int = 90,
+) -> dict[str, Any]:
+    """An Anthropic Messages response carrying ``text``."""
+    return {
+        "id": "msg_test",
+        "model": model,
+        "stop_reason": stop_reason,
+        "content": [{"type": "text", "text": text}],
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+
+
+@dataclass
+class FakeAI:
+    """Queues model replies for the provider the commands will build.
+
+    The whole provider stack is exercised (payload shape, headers, parsing,
+    accounting); only the socket is replaced.
+    """
+
+    transport: FakeTransport
+
+    def reply(self, payload: Any, **kwargs: Any) -> FakeAI:
+        """Queue one reply. A dict/list is sent as JSON, a string verbatim."""
+        text = payload if isinstance(payload, str) else json.dumps(payload)
+        self.transport.queue(body=anthropic_body(text, **kwargs))
+        return self
+
+    def raw(self, *, status: int = 200, body: dict[str, Any] | None = None) -> FakeAI:
+        self.transport.queue(status=status, body=body or {})
+        return self
+
+    @property
+    def calls(self) -> list[dict[str, Any]]:
+        return self.transport.calls
+
+    @property
+    def last_prompt(self) -> str:
+        """Every message of the last request, flattened - for asserting context."""
+        payload = self.transport.last["payload"] or {}
+        parts = [str(payload.get("system") or "")]
+        parts.extend(str(message.get("content", "")) for message in payload.get("messages", []))
+        return "\n".join(parts)
+
+
+@pytest.fixture
+def ai_config() -> AgentConfig:
+    """Configuration with a provider selected, as `rn-agent login` would leave it."""
+    config = AgentConfig()
+    config.ai.provider = "anthropic"
+    config.ai.model = AI_MODEL
+    return config
+
+
+@pytest.fixture
+def fake_ai(monkeypatch: pytest.MonkeyPatch, wired_transport: FakeTransport) -> FakeAI:
+    """A configured, credentialed provider whose transport is a queue."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", AI_KEY)
+    return FakeAI(transport=wired_transport)
+
+
+@pytest.fixture
+def ai_project(project: ProjectBuilder) -> ProjectBuilder:
+    """A project whose `.rn-agent/config.yaml` selects a provider and model."""
+    import yaml
+
+    paths = project.paths()
+    paths.ensure()
+    paths.config_file.write_text(
+        yaml.safe_dump({"ai": {"provider": "anthropic", "model": AI_MODEL}}),
+        encoding="utf-8",
+    )
+    return project

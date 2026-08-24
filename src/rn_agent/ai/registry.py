@@ -12,8 +12,8 @@ from typing import Any
 
 from ..errors import ProviderError
 from ..models.config import AIConfig
+from ..net.http import JsonTransport
 from .anthropic import AnthropicProvider
-from .http import JsonTransport
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .provider import AIProvider

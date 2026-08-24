@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from ..core.logging import get_logger
-from ..errors import ProviderError
+from ..errors import ProviderError, TransportError
+from ..net.http import DEFAULT_TIMEOUT, HttpResponse, JsonTransport, default_transport
 from ..utils.redaction import redact
-from .http import DEFAULT_TIMEOUT, HttpResponse, JsonTransport, TransportError, default_transport
 from .types import Completion, Message, Usage
 
 
@@ -204,9 +204,11 @@ class AIProvider(ABC):
                 method, url, headers=self._headers(), payload=payload, timeout=self.timeout
             )
         except TransportError as exc:
-            if self.unreachable_hint:
-                raise TransportError(exc.message, hint=self.unreachable_hint) from exc
-            raise
+            # A network failure on a model call is still an AI problem to the
+            # developer: keep exit code 10 and the provider's own advice.
+            raise ProviderError(
+                exc.message, hint=self.unreachable_hint or exc.hint
+            ) from exc
         self._logger.debug("%s %s -> %s", method, url, response.status)
         if not response.ok:
             raise self._failure(response)

@@ -151,8 +151,13 @@ proves a credential *and* yields the account's real catalogue, which is why
 are labelled suggestions, never presented as the catalogue — the same rule as the
 offline compatibility table.
 
-`ai/http.py` exists so no provider imports a client library. Tests hand a fake
-transport in; the `conftest` network guard stays armed for everything else.
+`net/http.py` exists so nothing imports a client library. It began as
+`ai/http.py`; phases 4 and 5 gave it two more consumers - the npm registry and
+the upstream React Native diffs - so it moved out of `ai/` rather than being
+imported sideways. `TransportError` is therefore no longer a `ProviderError`
+(exit 11, not 10); `AIProvider._request` translates it, so an AI network failure
+still reports 10 with the provider's own hint. Tests hand a fake transport in;
+the `conftest` network guard stays armed for everything else.
 
 ## Credential handling
 
@@ -185,35 +190,119 @@ and guessing is not an option.
 `login` verifies before it stores, so a key the provider rejects never lands in
 the keychain.
 
+## The AI work layer
+
+Six commands ask a model for something (`review`, `fix`, `feature`, `test`,
+`docs`, and the repair round inside `migrate`), so the parts they share live in
+`agents/` rather than in each of them:
+
+| Module | Responsibility |
+|---|---|
+| `rules.py` | `.rn-agent/rules.yaml` as prompt text **and** as a checker |
+| `context_builder.py` | which files may be sent, inside the configured budget |
+| `prompts.py` | the exact wording, and the JSON output contract per task |
+| `output.py` | decoding a reply, or refusing it |
+| `engine.py` | one call path: per-task model, accounting, one repair retry |
+| `apply.py` | rules -> risk -> consent -> write -> rollback |
+| `workflow.py` | apply, then prove, then undo when the proof fails |
+
+Two of those deserve the emphasis.
+
+**Rules are enforcement.** `as_prompt_lines()` tells the model the constraints;
+`violations()` is what actually holds. A model that ignores "do not add
+dependencies" still cannot write `package.json`, because `EditApplier.screen()`
+refuses the edit by path before the safety gate is reached. Lockfiles are refused
+unconditionally - they are generated files.
+
+**The reply is whole files, never a patch.** A hunk that fails to apply leaves a
+half-edited file; a full replacement either lands or does not, and `FileManager`
+holds the previous bytes. `output.py` drops an edit with no content, normalises
+an unknown severity to `medium` and an unknown area to `other`, and rejects an
+absolute or `..` path outright - so a creative reply cannot widen the vocabulary
+the rest of the agent trusts.
+
+`AIEngine` refuses a truncated answer rather than parsing half a file, and
+retries exactly once on an unparsable one, handing the parse error back. Two
+failures is an error: a model that cannot honour the contract twice will not
+honour it on the fifth attempt, and the developer pays per token.
+
+## Proof, and undoing
+
+`validation/runner.py` runs the project's *own* tools - `node_modules/.bin/tsc`,
+the project's test script, `android/gradlew` - never a tool it fetched itself.
+A step that cannot run reports `SKIP` with the reason, which is why
+`ValidationReport` distinguishes `ok` (nothing failed) from `proved` (something
+actually ran and passed). "The tests pass" and "there are no tests" are different
+facts and only one of them is evidence.
+
+Every write-command therefore reads: apply -> prove -> roll back on failure. That
+ordering is only safe because `FileManager` backed the previous bytes up first,
+which is the reason there is exactly one writer.
+
+## Strict diff application
+
+`migration/diff.py` is the most dangerous code in the agent, so it is the most
+conservative. A hunk applies only when the lines it claims to remove and the
+context around them match the file as it is now. The stated line number is a
+hint - real projects have drifted - so the matcher searches outward and requires
+**exactly one** match; zero or two is a conflict. There is no fuzzy mode and no
+partial write.
+
+Two subtleties the tests pinned down:
+
+* **"Already applied" is checked first.** A hunk that only adds lines still
+  matches its own context afterwards, so checking "does it apply?" first would
+  duplicate the addition on a re-run.
+* **`Hunk.header` is kept.** A stored hunk has to remain a valid patch fragment:
+  the planner records it, the applier re-parses it, and a conflict prints it for
+  the developer.
+
+Upstream diffs name the app `RnDiffApp`. That is mapped to the project's real
+name in paths *and* content; when the mapping cannot be made unambiguously the
+step becomes `MANUAL`, because writing `RnDiffApp` into someone's Xcode project
+is worse than admitting the limit.
+
 ## Adding a command
 
 ```python
-@register
 class ReviewCommand(AgentCommand[ReviewAnalysis, ReviewPlan]):
     name = "review"
     description = "Analyse components, hooks and performance"
     read_only = True
 
     def analyze(self) -> ReviewAnalysis:
-        project = self.context.project      # the shared brain
+        project, _ = self.context.ensure_project()   # the shared brain, refreshed
         ...
+
+register(ReviewCommand, phase=3)
 ```
 
-Then one Typer function in `cli/app.py` that builds the context and calls
-`run()`. Nothing else needs to change: the registry, logging, run recording and
-dry-run all pick it up.
-
-A command that needs a model asks the context for one:
+Then one Typer function in `cli/develop.py` or `cli/maintain.py`:
 
 ```python
-    def plan(self, analysis: ReviewAnalysis) -> ReviewPlan:
-        completion = self.context.ai.complete(
-            [Message.system(RULES), Message.user(prompt)], task="review"
-        )
-        self.context.record_ai_usage(completion)
+def review(...) -> None:
+    """Analyse components, hooks, state and performance with your model."""
+    from ..commands.review import ReviewCommand
+
+    context = build_context("review")
+    execute(ReviewCommand(context, ...))
 ```
 
-`context.ai` is lazy, so a read-only command that never touches it makes no
-network call and builds no provider; it raises `ProviderError` (exit code 10)
-when AI is unconfigured or disabled, rather than degrading into a guess.
-`record_ai_usage()` is the accounting hook for the `ai_usage` table.
+`cli/runtime.py` owns everything around the command - building the context,
+rendering an expected failure as a panel, suppressing the Rich report in `--json`
+mode, serialising `command.report`, and exiting with the command's code - so a
+new command needs one function and nothing else. The command module is imported
+*inside* the function, which is why `rn-agent scan --help` still loads no AI code.
+
+A command that needs a model asks the context for one, through the engine:
+
+```python
+    findings, notes, completion = AIEngine(self.context).review(
+        prompts.review_messages(project=project, rules=rules, context=selected)
+    )
+```
+
+`context.ai` is lazy, so a command that never touches it makes no network call
+and builds no provider; it raises `ProviderError` (exit code 10) when AI is
+unconfigured or disabled, rather than degrading into a guess. `AIEngine` calls
+`record_ai_usage()`, the accounting hook for the `ai_usage` table.

@@ -2,18 +2,14 @@
 
 The agent never proxies a request through a vendor of its own and never invents
 a fallback endpoint - a provider without a credential refuses to be built.
+
+The transport lives in :mod:`rn_agent.net`, not here: the npm registry and the
+upstream React Native diffs use the same seam.
 """
 
 from __future__ import annotations
 
 from .anthropic import AnthropicProvider
-from .http import (
-    HttpResponse,
-    HttpxTransport,
-    JsonTransport,
-    TransportError,
-    default_transport,
-)
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .provider import AIProvider, ProviderIdentity
@@ -33,19 +29,14 @@ __all__ = [
     "AIProvider",
     "AnthropicProvider",
     "Completion",
-    "HttpResponse",
-    "HttpxTransport",
-    "JsonTransport",
     "Message",
     "OllamaProvider",
     "OpenAIProvider",
     "ProviderIdentity",
     "ProviderSpec",
-    "TransportError",
     "Usage",
     "build_provider",
     "canonical_name",
-    "default_transport",
     "provider_names",
     "resolve_spec",
     "specs",

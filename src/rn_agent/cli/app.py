@@ -19,7 +19,7 @@ from ..core.command import AgentCommand, CommandOutcome
 from ..core.context import AgentContext
 from ..errors import RNAgentError
 from ..models.project import ProjectContext
-from . import auth, ui
+from . import auth, develop, maintain, runtime, ui
 from .options import OPTIONS
 
 app = typer.Typer(
@@ -67,24 +67,12 @@ def main_callback(
 
 
 def _build_context(command: str) -> AgentContext:
-    return AgentContext.create(
-        command=command,
-        start=OPTIONS.path,
-        dry_run=OPTIONS.dry_run,
-        assume_yes=OPTIONS.yes,
-        verbose=OPTIONS.verbose,
-        confirmer=ui.confirm,
-    )
+    return runtime.build_context(command)
 
 
 def _finish(outcome: CommandOutcome, payload: dict[str, Any] | None = None) -> None:
     """Render an error (if any) and exit with the command's code."""
-    if outcome.error is not None:
-        ui.error_panel(outcome.error.message, outcome.error.hint)
-        raise typer.Exit(outcome.exit_code)
-    if OPTIONS.json_output and payload is not None:
-        ui.console().print_json(json.dumps(payload, default=str))
-    raise typer.Exit(outcome.exit_code)
+    runtime.finish(outcome, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +244,13 @@ def _credential_source(context: AgentContext) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# AI setup (login/logout/whoami/provider/model) attaches itself, so this router
-# never has to know those commands exist.
+# The other command groups attach themselves, so this router never has to know
+# which commands exist: AI setup (phase 2), development (phase 3) and
+# maintenance (phases 4-6).
 # ---------------------------------------------------------------------------
 auth.register(app)
+develop.register(app)
+maintain.register(app)
 
 
 def main() -> None:

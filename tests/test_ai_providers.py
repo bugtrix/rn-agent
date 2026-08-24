@@ -10,12 +10,11 @@ from __future__ import annotations
 import pytest
 
 from rn_agent.ai.anthropic import AnthropicProvider
-from rn_agent.ai.http import TransportError
 from rn_agent.ai.ollama import OllamaProvider
 from rn_agent.ai.openai import OpenAIProvider
 from rn_agent.ai.registry import build_provider, canonical_name, provider_names, resolve_spec
 from rn_agent.ai.types import Completion, Message, Usage
-from rn_agent.errors import ProviderError
+from rn_agent.errors import ProviderError, TransportError
 from rn_agent.models.config import AIConfig
 
 KEY = "sk-ant-test-0123456789abcdef"

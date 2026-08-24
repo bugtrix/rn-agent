@@ -13,12 +13,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from ..ai.http import JsonTransport
 from ..ai.provider import AIProvider, ProviderIdentity
 from ..ai.registry import ProviderSpec, build_provider, resolve_spec
 from ..core.logging import get_logger
 from ..errors import ProviderError
 from ..models.config import AIConfig
+from ..net.http import JsonTransport
 from .keychain import select_backend
 from .store import Credential, CredentialStore
 

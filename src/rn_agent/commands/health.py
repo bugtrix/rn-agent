@@ -17,7 +17,6 @@ from ..core.context import AgentContext
 from ..core.registry import register
 from ..models.health import CheckStatus, HealthCheck, HealthReport, Severity
 from ..models.project import ProjectContext
-from ..project.scanner import ProjectScanner, save_context
 from ..reporting.health_view import render_health
 from ..utils.io import write_json
 
@@ -150,27 +149,8 @@ class HealthCommand(AgentCommand[HealthAnalysis, HealthPlan]):
     # -- helpers -----------------------------------------------------------
     def _project_context(self) -> tuple[ProjectContext, bool]:
         """Use the stored brain; rescan when missing, stale or requested."""
-        from ..project.scanner import context_age_seconds
-
-        agent = self.context
-        age = context_age_seconds(agent.paths)
-        needs_refresh = self.refresh or not agent.has_project_context() or (
-            age is not None and age > CONTEXT_STALE_SECONDS
+        return self.context.ensure_project(
+            refresh=self.refresh,
+            probe_tools=True,
+            stale_seconds=CONTEXT_STALE_SECONDS,
         )
-        if not needs_refresh:
-            try:
-                return agent.project, False
-            except Exception as exc:
-                self.logger.warning("stored context unusable (%s); rescanning", exc)
-
-        scanner = ProjectScanner(agent.detected, agent.paths, agent.runner, knowledge=agent.knowledge)
-        project = scanner.scan(
-            probe_tools=True, git_info=agent.git.describe(), source_stats=agent.walker.stats()
-        )
-        agent.set_project(project)
-        if not agent.dry_run:
-            try:
-                save_context(agent.paths, project)
-            except OSError as exc:  # pragma: no cover
-                self.logger.warning("could not persist refreshed context: %s", exc)
-        return project, True
