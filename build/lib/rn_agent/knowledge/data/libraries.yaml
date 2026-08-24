@@ -1,0 +1,128 @@
+# Package -> architecture role.
+#
+# Pure name mapping (no version claims): used by the scanner to *infer* the
+# architecture a project already uses, so later commands follow it instead of
+# imposing a different stack.
+#
+# `match: exact` compares the package name; `match: prefix` matches a scope or
+# name prefix such as `@react-navigation/`.
+
+state_management:
+  - { name: "@reduxjs/toolkit", label: "redux-toolkit", match: exact }
+  - { name: "redux-saga", label: "redux-saga", match: exact }
+  - { name: "redux-thunk", label: "redux-thunk", match: exact }
+  - { name: "redux-persist", label: "redux-persist", match: exact }
+  - { name: "react-redux", label: "redux", match: exact }
+  - { name: "redux", label: "redux", match: exact }
+  - { name: "zustand", label: "zustand", match: exact }
+  - { name: "mobx", label: "mobx", match: exact }
+  - { name: "mobx-state-tree", label: "mobx-state-tree", match: exact }
+  - { name: "jotai", label: "jotai", match: exact }
+  - { name: "recoil", label: "recoil", match: exact }
+  - { name: "valtio", label: "valtio", match: exact }
+  - { name: "effector", label: "effector", match: exact }
+  - { name: "xstate", label: "xstate", match: exact }
+  - { name: "@legendapp/state", label: "legend-state", match: exact }
+
+data_fetching:
+  - { name: "@tanstack/react-query", label: "react-query", match: exact }
+  - { name: "react-query", label: "react-query (legacy)", match: exact }
+  - { name: "swr", label: "swr", match: exact }
+  - { name: "@apollo/client", label: "apollo-graphql", match: exact }
+  - { name: "urql", label: "urql", match: exact }
+  - { name: "relay-runtime", label: "relay", match: exact }
+  - { name: "@rtk-query", label: "rtk-query", match: prefix }
+
+api_layer:
+  - { name: "axios", label: "axios", match: exact }
+  - { name: "apisauce", label: "apisauce", match: exact }
+  - { name: "ky", label: "ky", match: exact }
+  - { name: "got", label: "got", match: exact }
+  - { name: "graphql-request", label: "graphql-request", match: exact }
+  - { name: "graphql", label: "graphql", match: exact }
+
+navigation:
+  - { name: "@react-navigation/", label: "react-navigation", match: prefix }
+  - { name: "react-native-navigation", label: "wix-react-native-navigation", match: exact }
+  - { name: "expo-router", label: "expo-router", match: exact }
+  - { name: "react-router-native", label: "react-router-native", match: exact }
+  - { name: "@bottom-tabs/react-navigation", label: "react-navigation-native-tabs", match: exact }
+  - { name: "react-native-bottom-tabs", label: "react-native-bottom-tabs", match: exact }
+  - { name: "react-native-screens", label: "react-native-screens", match: exact }
+
+styling:
+  - { name: "styled-components", label: "styled-components", match: exact }
+  - { name: "@emotion/native", label: "emotion", match: exact }
+  - { name: "nativewind", label: "nativewind", match: exact }
+  - { name: "tailwindcss", label: "tailwind", match: exact }
+  - { name: "react-native-unistyles", label: "unistyles", match: exact }
+  - { name: "@shopify/restyle", label: "restyle", match: exact }
+  - { name: "react-native-paper", label: "react-native-paper", match: exact }
+  - { name: "@rneui/themed", label: "rn-elements", match: exact }
+  - { name: "react-native-elements", label: "rn-elements (legacy)", match: exact }
+  - { name: "@gluestack-ui/themed", label: "gluestack", match: exact }
+  - { name: "tamagui", label: "tamagui", match: exact }
+  - { name: "react-native-size-matters", label: "size-matters", match: exact }
+  - { name: "react-native-responsive-screen", label: "responsive-screen", match: exact }
+
+forms:
+  - { name: "react-hook-form", label: "react-hook-form", match: exact }
+  - { name: "formik", label: "formik", match: exact }
+  - { name: "final-form", label: "final-form", match: exact }
+  - { name: "@tanstack/react-form", label: "tanstack-form", match: exact }
+
+validation:
+  - { name: "yup", label: "yup", match: exact }
+  - { name: "zod", label: "zod", match: exact }
+  - { name: "joi", label: "joi", match: exact }
+  - { name: "valibot", label: "valibot", match: exact }
+  - { name: "class-validator", label: "class-validator", match: exact }
+
+testing:
+  - { name: "jest", label: "jest", match: exact }
+  - { name: "@testing-library/react-native", label: "react-native-testing-library", match: exact }
+  - { name: "@testing-library/jest-native", label: "jest-native-matchers", match: exact }
+  - { name: "detox", label: "detox", match: exact }
+  - { name: "@wdio/cli", label: "webdriverio", match: exact }
+  - { name: "maestro", label: "maestro", match: exact }
+  - { name: "react-test-renderer", label: "react-test-renderer", match: exact }
+  - { name: "vitest", label: "vitest", match: exact }
+  - { name: "@playwright/test", label: "playwright", match: exact }
+
+i18n:
+  - { name: "i18next", label: "i18next", match: exact }
+  - { name: "react-i18next", label: "react-i18next", match: exact }
+  - { name: "i18n-js", label: "i18n-js", match: exact }
+  - { name: "react-native-localize", label: "react-native-localize", match: exact }
+  - { name: "expo-localization", label: "expo-localization", match: exact }
+  - { name: "@formatjs/intl", label: "formatjs", match: prefix }
+
+analytics:
+  - { name: "@react-native-firebase/analytics", label: "firebase-analytics", match: exact }
+  - { name: "@amplitude/analytics-react-native", label: "amplitude", match: exact }
+  - { name: "@segment/analytics-react-native", label: "segment", match: exact }
+  - { name: "mixpanel-react-native", label: "mixpanel", match: exact }
+  - { name: "@sentry/react-native", label: "sentry", match: exact }
+  - { name: "@bugsnag/react-native", label: "bugsnag", match: exact }
+  - { name: "posthog-react-native", label: "posthog", match: exact }
+  - { name: "@datadog/mobile-react-native", label: "datadog", match: exact }
+
+# Notable capabilities worth surfacing in the scan summary.
+capabilities:
+  - { name: "react-native-reanimated", label: "reanimated", match: exact }
+  - { name: "react-native-gesture-handler", label: "gesture-handler", match: exact }
+  - { name: "react-native-vision-camera", label: "vision-camera", match: exact }
+  - { name: "react-native-maps", label: "maps", match: exact }
+  - { name: "@react-native-firebase/app", label: "firebase", match: exact }
+  - { name: "@shopify/flash-list", label: "flash-list", match: exact }
+  - { name: "@shopify/react-native-skia", label: "skia", match: exact }
+  - { name: "react-native-mmkv", label: "mmkv", match: exact }
+  - { name: "@react-native-async-storage/async-storage", label: "async-storage", match: exact }
+  - { name: "react-native-webview", label: "webview", match: exact }
+  - { name: "react-native-svg", label: "svg", match: exact }
+  - { name: "react-native-iap", label: "in-app-purchase", match: exact }
+  - { name: "react-native-permissions", label: "permissions", match: exact }
+  - { name: "react-native-device-info", label: "device-info", match: exact }
+  - { name: "@notifee/react-native", label: "notifee", match: exact }
+  - { name: "react-native-code-push", label: "code-push", match: exact }
+  - { name: "expo", label: "expo-modules", match: exact }

@@ -1,0 +1,41 @@
+{
+  "name": "rn-agent",
+  "version": "0.1.0",
+  "description": "AI-powered React Native engineering CLI: scan, health, review, fix, upgrade, migrate",
+  "keywords": [
+    "react-native",
+    "cli",
+    "ai",
+    "agent",
+    "migration",
+    "upgrade",
+    "android",
+    "ios"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "bin": {
+    "rn-agent": "bin/rn-agent.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "vendor/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node lib/install.js",
+    "test": "node bin/rn-agent.js --version"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rn-agent/rn-agent.git"
+  }
+}

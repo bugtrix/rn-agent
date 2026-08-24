@@ -1,0 +1,2 @@
+[console_scripts]
+rn-agent = rn_agent.cli.app:main

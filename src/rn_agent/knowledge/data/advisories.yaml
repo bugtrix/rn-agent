@@ -1,0 +1,203 @@
+# Curated offline advisories.
+#
+# Every entry states its own source so a developer can verify it, and a
+# `confidence` marker so the analyzer can decide between a warning and a note.
+# Nothing here is version-guessed: entries only describe package *renames*,
+# *removals* and *platform policies* that are stable, published facts.
+#
+# Refresh policy: this file is the offline fallback. When `node_modules` is
+# installed, the analyzers prefer the real package metadata on disk.
+
+deprecated_packages:
+  - name: "@types/react-native"
+    reason: "React Native ships its own TypeScript types since 0.71; the DefinitelyTyped package conflicts with them."
+    replacement: "remove the dependency"
+    severity: high
+    applies_when_rn_at_least: "0.71.0"
+    source: "https://reactnative.dev/blog/2022/12/13/version-071"
+    confidence: high
+
+  - name: "@react-native-community/async-storage"
+    reason: "Moved to a new scope; the old package is no longer published."
+    replacement: "@react-native-async-storage/async-storage"
+    severity: high
+    source: "https://github.com/react-native-async-storage/async-storage"
+    confidence: high
+
+  - name: "@react-native-community/masked-view"
+    reason: "Moved to a new scope."
+    replacement: "@react-native-masked-view/masked-view"
+    severity: medium
+    source: "https://github.com/react-native-masked-view/masked-view"
+    confidence: high
+
+  - name: "@react-native-community/eslint-config"
+    reason: "Replaced by the @react-native scope when React Native 0.73 reorganised its packages."
+    replacement: "@react-native/eslint-config"
+    severity: low
+    applies_when_rn_at_least: "0.73.0"
+    source: "https://reactnative.dev/blog/2023/12/06/0.73-debugging-improvements-stable-symlinks"
+    confidence: high
+
+  - name: "metro-react-native-babel-preset"
+    reason: "Replaced by @react-native/babel-preset in React Native 0.73."
+    replacement: "@react-native/babel-preset"
+    severity: medium
+    applies_when_rn_at_least: "0.73.0"
+    source: "https://reactnative.dev/blog/2023/12/06/0.73-debugging-improvements-stable-symlinks"
+    confidence: high
+
+  - name: "react-navigation"
+    reason: "React Navigation 5+ is published under the @react-navigation scope."
+    replacement: "@react-navigation/native"
+    severity: medium
+    source: "https://reactnavigation.org/docs/upgrading-from-4.x"
+    confidence: high
+
+  - name: "react-native-safe-area-view"
+    reason: "Superseded by react-native-safe-area-context."
+    replacement: "react-native-safe-area-context"
+    severity: medium
+    source: "https://github.com/th3rdwave/react-native-safe-area-context"
+    confidence: high
+
+  - name: "react-native-unimodules"
+    reason: "Discontinued in favour of the Expo modules autolinking setup."
+    replacement: "expo (expo-modules-core)"
+    severity: medium
+    source: "https://expo.dev/blog/expo-sdk-45-and-react-native-unimodules"
+    confidence: medium
+
+  - name: "jetifier"
+    reason: "AndroidX bridging tool; unnecessary once every dependency ships AndroidX artifacts."
+    replacement: "remove the dependency"
+    severity: low
+    source: "https://github.com/mikehardy/jetifier"
+    confidence: medium
+
+  - name: "rn-fetch-blob"
+    reason: "Upstream project is unmaintained."
+    replacement: "react-native-blob-util"
+    severity: low
+    source: "https://github.com/RonRadtke/react-native-blob-util"
+    confidence: medium
+
+# Packages whose name looks native but that ship no platform code. Used only
+# when node_modules is absent and detection has to fall back to heuristics.
+javascript_only_packages:
+  - react-native-elements
+  - react-native-paper
+  - react-native-size-matters
+  - react-native-responsive-screen
+  - react-native-modal
+  - react-native-snap-carousel
+  - react-native-collapsible
+  - react-native-calendars
+  - react-native-calendar-picker
+  - react-native-calendar-strip
+  - react-native-swiper
+  - react-native-easy-grid
+  - react-native-htmlview
+  - react-native-render-html
+  - react-native-toast-message
+  - react-native-keyboard-aware-scroll-view
+  - react-native-super-grid
+  - react-native-animatable
+  - react-native-vector-icons-fonts
+  - react-native-asset
+  - react-native-svg-charts
+  - react-native-really-awesome-button
+
+# Runtime permissions implied by a dependency. `required: true` means the
+# platform terminates the app (iOS) or the API silently fails (Android) when
+# the declaration is missing.
+permission_requirements:
+  - package: react-native-vision-camera
+    ios_keys: [NSCameraUsageDescription]
+    android_permissions: [android.permission.CAMERA]
+    required: true
+    source: "https://react-native-vision-camera.com/docs/guides"
+  - package: react-native-image-picker
+    ios_keys: [NSPhotoLibraryUsageDescription, NSCameraUsageDescription]
+    android_permissions: []
+    required: true
+    source: "https://github.com/react-native-image-picker/react-native-image-picker"
+  - package: "@react-native-camera-roll/camera-roll"
+    ios_keys: [NSPhotoLibraryUsageDescription]
+    android_permissions: [android.permission.READ_MEDIA_IMAGES]
+    required: true
+    source: "https://github.com/react-native-cameraroll/react-native-cameraroll"
+  - package: "@react-native-community/geolocation"
+    ios_keys: [NSLocationWhenInUseUsageDescription]
+    android_permissions: [android.permission.ACCESS_FINE_LOCATION]
+    required: true
+    source: "https://github.com/michalchudziak/react-native-geolocation"
+  - package: react-native-geolocation-service
+    ios_keys: [NSLocationWhenInUseUsageDescription]
+    android_permissions: [android.permission.ACCESS_FINE_LOCATION]
+    required: true
+    source: "https://github.com/Agontuk/react-native-geolocation-service"
+  - package: react-native-contacts
+    ios_keys: [NSContactsUsageDescription]
+    android_permissions: [android.permission.READ_CONTACTS]
+    required: true
+    source: "https://github.com/morenoh149/react-native-contacts"
+  - package: "@react-native-voice/voice"
+    ios_keys: [NSSpeechRecognitionUsageDescription, NSMicrophoneUsageDescription]
+    android_permissions: [android.permission.RECORD_AUDIO]
+    required: true
+    source: "https://github.com/react-native-voice/voice"
+  - package: react-native-ble-plx
+    ios_keys: [NSBluetoothAlwaysUsageDescription]
+    android_permissions: [android.permission.BLUETOOTH_SCAN, android.permission.BLUETOOTH_CONNECT]
+    required: true
+    source: "https://github.com/dotintent/react-native-ble-plx"
+  - package: "@react-native-firebase/messaging"
+    ios_keys: []
+    android_permissions: [android.permission.POST_NOTIFICATIONS]
+    required: true
+    note: "Android 13+ (API 33) requires POST_NOTIFICATIONS to show notifications."
+    source: "https://developer.android.com/develop/ui/views/notifications/notification-permission"
+  - package: react-native-maps
+    ios_keys: []
+    android_permissions: []
+    required: false
+    note: "Only needed when showing the user's location."
+    source: "https://github.com/react-native-maps/react-native-maps"
+
+# Platform store policies with their effective dates. `enforce: false` entries
+# are reported as information only because the agent cannot verify them offline.
+platform_policies:
+  android_target_sdk:
+    source: "https://developer.android.com/google/play/requirements/target-sdk"
+    note: "Google Play raises the required targetSdkVersion every year (deadline 31 August)."
+    requirements:
+      - { target_sdk: 33, effective: "2023-08-31", enforce: true, confidence: high }
+      - { target_sdk: 34, effective: "2024-08-31", enforce: true, confidence: high }
+      - { target_sdk: 35, effective: "2025-08-31", enforce: true, confidence: high }
+      - { target_sdk: 36, effective: "2026-08-31", enforce: false, confidence: unverified }
+  ios_privacy_manifest:
+    source: "https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api"
+    effective: "2024-05-01"
+    note: "App Store submissions that include listed SDKs must ship a PrivacyInfo.xcprivacy."
+    confidence: high
+
+# React Native <-> React/Node pairings, used ONLY when node_modules is missing.
+# With dependencies installed the analyzers read the real
+# node_modules/react-native/package.json instead (engines + peerDependencies).
+react_native_compatibility:
+  source: "react-native package metadata (peerDependencies / engines)"
+  note: "Offline fallback table. Verify with the Upgrade Helper before acting on it."
+  versions:
+    "0.71": { react: "18.2.0", node: ">=16", confidence: high }
+    "0.72": { react: "18.2.0", node: ">=16", confidence: high }
+    "0.73": { react: "18.2.0", node: ">=18", confidence: high }
+    "0.74": { react: "18.2.0", node: ">=18", confidence: high }
+    "0.75": { react: "18.3.1", node: ">=18", confidence: high }
+    "0.76": { react: "18.3.1", node: ">=18", confidence: high }
+    "0.77": { react: "18.3.1", node: ">=18.18", confidence: medium }
+    "0.78": { react: "19.0.0", node: ">=18.18", confidence: high }
+    "0.79": { react: "19.0.0", node: ">=18.18", confidence: high }
+    "0.80": { react: "19.1.0", node: ">=20.19.4", confidence: medium }
+    "0.81": { react: "19.1.0", node: ">=20.19.4", confidence: medium }
+    "0.82": { react: "19.1.1", node: ">=20.19.4", confidence: high }
