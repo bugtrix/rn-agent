@@ -50,6 +50,11 @@ class AIConfig(BaseModel):
     timeout_seconds: float = 120.0
     max_context_files: int = 40
     max_context_tokens: int = 120_000
+    #: Google Cloud project and location, for Claude on Vertex AI. Vertex bills
+    #: the project, so there is no sensible default to invent - the provider
+    #: refuses with an actionable message when it is unset.
+    project: str | None = None
+    region: str = "global"
 
     def model_for(self, task: str | None = None) -> str | None:
         return self.models.for_task(task) or self.model
@@ -93,6 +98,25 @@ class ContextConfig(BaseModel):
     max_file_kb: int = 96
 
 
+class UIConfig(BaseModel):
+    """How the terminal presents itself.
+
+    ``interactive: false`` is the escape hatch for a machine that should never
+    open a picker - a CI image, a dumb terminal, an editor's task runner. Bare
+    ``rn-agent`` then prints its status and the command list instead of taking
+    over the screen.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    interactive: bool = True
+    colors: bool = True
+    #: The boxed header. Off for a terser session.
+    banner: bool = True
+    #: The one-line status bar under each answer.
+    status_bar: bool = True
+
+
 class LoggingConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -115,6 +139,7 @@ class AgentConfig(BaseModel):
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     migration: MigrationConfig = Field(default_factory=MigrationConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def to_yaml_dict(self) -> dict[str, object]:

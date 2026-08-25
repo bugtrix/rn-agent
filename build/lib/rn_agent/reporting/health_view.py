@@ -69,16 +69,20 @@ def render_health(report: HealthReport, *, verbose: bool = False) -> None:
                 f"  {marker} [{ui.SEVERITY_STYLE[severity.value]}]{check.title}[/]"
                 f"  [muted]{check.id}[/muted]"
             )
-            ui.console().print(f"      {check.detail}")
+            ui.indented(check.detail)
             if check.recommendation:
-                ui.console().print(f"      [info]{ui.ARROW} {check.recommendation}[/info]")
+                ui.indented(f"{ui.ARROW} {check.recommendation}", style="info")
+            for line in check.fix:
+                # The exact text to paste, so nobody has to reconstruct syntax
+                # from prose.
+                ui.code(line)
             if verbose:
                 for key, value in check.evidence.items():
-                    ui.console().print(f"      [muted]{key}: {value}[/muted]")
+                    ui.code(f"{key}: {value}", indent=6, style="muted")
                 if check.source:
-                    ui.console().print(f"      [muted]source: {check.source}[/muted]")
+                    ui.code(f"source: {check.source}", indent=6, style="muted")
                 if check.docs:
-                    ui.console().print(f"      [muted]docs: {check.docs}[/muted]")
+                    ui.code(f"docs: {check.docs}", indent=6, style="muted")
 
     if verbose:
         passed = report.passed

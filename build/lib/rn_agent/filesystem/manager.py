@@ -134,6 +134,48 @@ class FileManager:
         )
         return self.changes.add(change)
 
+    def delete(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        reason: str,
+        risk: RiskLevel = RiskLevel.MEDIUM,
+    ) -> FileChange | None:
+        """Remove a project file, backing it up first.
+
+        A delete is never low risk: the backup is what makes it reversible, so
+        ``create_backups: false`` plus a delete is the one combination that
+        cannot be undone - and it is recorded as such.
+        """
+        target = self.resolve(path)
+        if not target.is_file():
+            return None
+        before = read_text(target)
+        backup: Path | None = None
+        if not self.dry_run:
+            if self.create_backups:
+                backup = self._backup(target)
+            target.unlink()
+        change = FileChange(
+            path=self.relative(target),
+            change_type=ChangeType.DELETE,
+            reason=reason,
+            command=self.command,
+            risk=max(risk, RiskLevel.MEDIUM, key=lambda level: level.rank),
+            before_hash=digest(before),
+            before_bytes=len(before.encode()) if before is not None else None,
+            backup=str(backup) if backup else None,
+            applied=not self.dry_run,
+            dry_run=self.dry_run,
+        )
+        self.logger.info(
+            "%s %s (delete, risk=%s)",
+            "would delete" if self.dry_run else "deleted",
+            change.path,
+            change.risk.value,
+        )
+        return self.changes.add(change)
+
     def write_state(
         self, path: Path, content: str, *, reason: str
     ) -> FileChange | None:

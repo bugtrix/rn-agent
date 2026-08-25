@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from ..core.logging import get_logger
-from ..errors import ProviderError
+from ..errors import ProviderError, TransportError
+from ..net.http import DEFAULT_TIMEOUT, HttpResponse, JsonTransport, default_transport
 from ..utils.redaction import redact
-from .http import DEFAULT_TIMEOUT, HttpResponse, JsonTransport, TransportError, default_transport
 from .types import Completion, Message, Usage
 
 
@@ -67,6 +67,13 @@ class AIProvider(ABC):
     models_path: ClassVar[str] = ""
     #: Provider-specific advice when the host cannot be reached at all.
     unreachable_hint: ClassVar[str | None] = None
+    #: What a valid model id looks like, when "run `rn-agent model <name>`" is
+    #: not enough. Vertex ids carry a release date, for instance.
+    model_hint: ClassVar[str | None] = None
+    #: False when the backend picks its own model if none is named. An HTTP API
+    #: needs a model in the request; an agent CLI already has an account default,
+    #: and demanding one here would mean inventing an id we cannot verify.
+    requires_model: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -135,10 +142,10 @@ class AIProvider(ABC):
         if not messages:
             raise ProviderError("cannot send an empty conversation to a model")
         chosen = model or self.model
-        if not chosen:
+        if not chosen and self.requires_model:
             raise ProviderError(
                 f"no model selected for {self.name}",
-                hint=f"Run `rn-agent model {self.default_model or '<name>'}`.",
+                hint=self.model_hint or f"Run `rn-agent model {self.default_model or '<name>'}`.",
             )
         payload = self._payload(
             list(messages),
@@ -147,7 +154,7 @@ class AIProvider(ABC):
             max_output_tokens=max_output_tokens or self.max_output_tokens,
             temperature=self.temperature if temperature is None else temperature,
         )
-        response = self._request("POST", self.completion_path, payload=payload)
+        response = self._request("POST", self._completion_path(chosen), payload=payload)
         completion = self._parse_completion(response.body, model=chosen, task=task)
         self._logger.info(
             "%s %s: %s in / %s out tokens",
@@ -192,6 +199,16 @@ class AIProvider(ABC):
         """Turn a provider response into a :class:`Completion`."""
 
     # -- plumbing ----------------------------------------------------------
+    def _completion_path(self, model: str) -> str:
+        """Where to POST a completion for ``model``.
+
+        Most APIs take the model in the body and this is a constant. Google's
+        Gemini API puts it in the URL (``/v1beta/models/<model>:generateContent``),
+        so the path is a function of the model rather than a class attribute.
+        """
+        _ = model
+        return self.completion_path
+
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}" if path.startswith("/") else f"{self.base_url}/{path}"
 
@@ -204,9 +221,11 @@ class AIProvider(ABC):
                 method, url, headers=self._headers(), payload=payload, timeout=self.timeout
             )
         except TransportError as exc:
-            if self.unreachable_hint:
-                raise TransportError(exc.message, hint=self.unreachable_hint) from exc
-            raise
+            # A network failure on a model call is still an AI problem to the
+            # developer: keep exit code 10 and the provider's own advice.
+            raise ProviderError(
+                exc.message, hint=self.unreachable_hint or exc.hint
+            ) from exc
         self._logger.debug("%s %s -> %s", method, url, response.status)
         if not response.ok:
             raise self._failure(response)

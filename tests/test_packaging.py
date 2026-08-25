@@ -66,13 +66,24 @@ def test_every_subpackage_is_importable_and_therefore_shipped():
     """
     src = ROOT / "src" / "rn_agent"
     packages = {path.parent.name for path in src.rglob("__init__.py")}
-    assert {"ai", "auth"} <= packages
+    assert {"ai", "auth", "net", "tui", "agents", "validation", "migration", "upgrade"} <= packages
 
     from rn_agent.ai import provider_names
     from rn_agent.auth import BACKENDS
 
-    assert set(provider_names()) == {"anthropic", "openai", "ollama"}
+    assert set(provider_names()) == {"anthropic", "openai", "google", "vertex", "cursor", "ollama"}
     assert "file" in BACKENDS
+
+
+def test_the_type_marker_is_present_because_pyproject_ships_it():
+    """``package-data`` promises ``py.typed``; a missing file breaks consumers."""
+    assert (ROOT / "src" / "rn_agent" / "py.typed").is_file()
+    assert "py.typed" in read("pyproject.toml")
+
+
+def test_prompt_toolkit_is_declared_because_the_terminal_needs_it():
+    """The interactive terminal is not optional, so neither is its dependency."""
+    assert "prompt_toolkit" in read("pyproject.toml")
 
 
 def test_wrapper_requires_python_311_or_newer():

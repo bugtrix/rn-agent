@@ -125,14 +125,32 @@ def _render_status(status: session.AuthStatus) -> None:
         )
 
 
+def _announce_device(code: Any) -> None:
+    """Show the code the developer types on the machine that has a browser.
+
+    Printed rather than opened: the whole point of the device grant is that this
+    machine cannot show a consent screen.
+    """
+    ui.blank()
+    ui.bullet(f"Open [value]{code.verification_url}[/value]")
+    ui.bullet(f"Enter the code [value]{code.user_code}[/value]")
+    ui.note(f"waiting for approval (expires in {int(code.expires_in // 60)} min)")
+
+
 def _read_secret(spec: ProviderSpec, *, api_key: str | None, from_stdin: bool) -> str | None:
-    """Get the key from the least dangerous source the developer offered."""
-    if not spec.requires_credential:
-        return None
+    """Get the key from the least dangerous source the developer offered.
+
+    A provider that needs no credential is never *prompted* for one - Ollama has
+    no account, and Cursor's CLI holds its own session. But an explicit
+    ``--api-key``/``--stdin`` is a decision the developer already made (it is how
+    CI supplies ``CURSOR_API_KEY``), so it is honoured rather than dropped.
+    """
     if from_stdin:
         return sys.stdin.read().strip() or None
     if api_key:
         return api_key.strip() or None
+    if not spec.requires_credential:
+        return None
     typed = ui.ask_secret(f"{spec.label} API key")
     if typed:
         return typed
@@ -160,6 +178,38 @@ def login(
     from_stdin: Annotated[
         bool, typer.Option("--stdin", help="Read the key from standard input (CI-friendly).")
     ] = False,
+    client_id: Annotated[
+        str | None,
+        typer.Option("--client-id", help="OAuth client id, for a provider that supports OAuth."),
+    ] = None,
+    client_secret: Annotated[
+        str | None, typer.Option("--client-secret", help="OAuth client secret (installed app).")
+    ] = None,
+    client_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--client-file",
+            help="Google's downloaded client_secret.json, instead of --client-id/--client-secret.",
+        ),
+    ] = None,
+    device: Annotated[
+        bool,
+        typer.Option(
+            "--device",
+            help="Sign in on another machine (RFC 8628). Used automatically with no browser.",
+        ),
+    ] = False,
+    cloud_project: Annotated[
+        str | None,
+        typer.Option(
+            "--cloud-project",
+            help="Google Cloud project that pays for Vertex AI requests.",
+        ),
+    ] = None,
+    region: Annotated[
+        str | None,
+        typer.Option("--region", help="Vertex AI location (default: global)."),
+    ] = None,
     model_name: Annotated[
         str | None, typer.Option("--model", help="Default model for this provider.")
     ] = None,
@@ -175,54 +225,162 @@ def login(
         typer.Option("--project", help="Save provider/model in .rn-agent/config.yaml, not your user config."),
     ] = False,
 ) -> None:
-    """Connect your own AI account; the key goes to your OS keychain."""
+    """Connect your own AI account, by whatever mechanism that provider supports."""
     with _cli_errors():
+        from ..auth.authenticator import AuthMethod
+        from ..auth.manager import AuthenticationManager
+        from ..auth.methods import browser_available
+
         paths = _paths()
         config = _load(paths)
         spec = resolve_spec(provider_name or config.provider)
-        secret = _read_secret(spec, api_key=api_key, from_stdin=from_stdin)
-        store = _store()
-        if secret is None and spec.requires_credential and store.resolve(spec) is None:
-            raise ProviderError(
-                f"no API key provided for {spec.name}",
-                hint=(
-                    f"Pass --api-key, pipe it with --stdin, or export {spec.env_var}. "
-                    f"Keys: {spec.docs_url}"
-                ),
+        manager = AuthenticationManager()
+        authenticator = manager.for_provider(spec.name)
+        capability = authenticator.capability
+
+        # Only ask for a key when a key is what this provider actually takes.
+        secret: str | None = None
+        if capability.method is AuthMethod.API_KEY or api_key or from_stdin:
+            secret = _read_secret(spec, api_key=api_key, from_stdin=from_stdin)
+            if secret is None and spec.requires_credential and not authenticator.state().connected:
+                raise ProviderError(
+                    f"no API key provided for {spec.name}",
+                    hint=(
+                        f"Pass --api-key, pipe it with --stdin, or export {spec.env_var}. "
+                        f"Keys: {spec.docs_url}"
+                    ),
+                )
+
+        if not OPTIONS.json_output:
+            ui.header(f"Sign in · {spec.label}", f"auth: {capability.label}")
+            if capability.detail:
+                ui.note(capability.detail)
+            if capability.unsupported_note:
+                # Say why this is a key rather than an account login.
+                ui.console().print(f"  [muted]{capability.unsupported_note}[/muted]")
+            if capability.method is AuthMethod.OAUTH and not secret:
+                # Say what is about to happen, not what usually happens: on a
+                # machine with no browser this is a device code, not a redirect.
+                if device or not browser_available():
+                    ui.bullet("No browser here - signing in with a device code")
+                else:
+                    ui.bullet(f"Opening {spec.label} in your browser…")
+
+        # Order matters. A key is verified *before* it is stored, so a credential
+        # the provider rejects never reaches the keychain. An OAuth session can
+        # only be verified after the flow completes, because until then there is
+        # no token to check.
+        identity = None
+        # Ollama needs no credential but still has a server worth reaching, so
+        # verification is gated on the developer's --no-verify, not on whether a
+        # secret exists.
+        verify = not no_verify
+        if verify and secret:
+            identity = _verify(
+                spec, config, manager, credential=secret, model=model_name, base_url=base_url
             )
 
-        result = session.login(
-            provider=spec.name,
-            config=config,
-            store=store,
+        outcome = authenticator.login(
             secret=secret,
-            model=model_name,
-            base_url=base_url,
-            verify=not no_verify,
+            client_id=client_id,
+            client_secret=client_secret,
+            client_file=str(client_file) if client_file else None,
+            device=device,
+            announce=None if OPTIONS.json_output else _announce_device,
             dry_run=OPTIONS.dry_run,
         )
+
+        if verify and identity is None and outcome.state.connected:
+            identity = _verify(
+                spec,
+                config,
+                manager,
+                credential=manager.credential(spec.name),
+                model=model_name,
+                base_url=base_url,
+            )
 
         patch: dict[str, Any] = {"ai": {"provider": spec.name}}
         if model_name:
             patch["ai"]["model"] = model_name
         if base_url:
             patch["ai"]["base_url"] = base_url
+        if cloud_project:
+            patch["ai"]["project"] = cloud_project
+        if region:
+            patch["ai"]["region"] = region
         written = _write(patch, paths=paths, project=project)
 
-        payload = {**result.as_dict(), "config_file": str(written) if written else None}
+        effective_model = model_name or config.model_for(None) or spec.default_model
+        effective_host = base_url or config.base_url or spec.base_url
+        payload = {
+            **outcome.as_dict(),
+            "auth": capability.as_dict(),
+            "model": effective_model,
+            "base_url": effective_host,
+            "verified": None if not verify else identity is not None and identity.ok,
+            "identity": identity.as_dict() if identity else None,
+            "config_file": str(written) if written else None,
+        }
         if not OPTIONS.json_output:
-            _render_status(result.status)
             ui.blank()
-            if result.stored:
-                ui.success(f"credential stored in {store.backend.label}")
-            if not no_verify and result.identity is not None:
-                ui.success(result.identity.detail)
+            ui.key_values(
+                [
+                    ("provider", spec.label),
+                    ("auth", capability.label),
+                    ("model", effective_model),
+                    ("api host", effective_host),
+                    ("credential", outcome.state.label or "-"),
+                ]
+            )
+            state = outcome.state
+            if state.connected:
+                account = f" as {state.account}" if state.account else ""
+                ui.success(f"{spec.label} connected{account} · auth: {state.method.label}")
+            elif capability.method is not AuthMethod.NONE:
+                ui.warning(f"{spec.label} is not connected")
+            if outcome.stored:
+                ui.note(f"credential stored in {manager.credentials.backend.label}")
+            if identity is not None:
+                ui.success(identity.detail)
             elif no_verify:
                 ui.note("credential not verified (--no-verify)")
             ui.note(f"config: {_target_label(written, project=project)}")
-            for warning in result.warnings:
+            for warning in outcome.warnings:
                 ui.warning(warning)
         _emit(payload)
+
+
+def _verify(
+    spec: Any,
+    config: AIConfig,
+    manager: Any,
+    *,
+    credential: str | None,
+    model: str | None,
+    base_url: str | None,
+) -> Any:
+    """Check a credential against the provider's own endpoint.
+
+    Takes the credential explicitly so a key can be checked *before* it is
+    stored - which is what stops a rejected key reaching the keychain - and an
+    OAuth token can be checked after the flow, when one finally exists.
+    """
+    from ..ai.registry import build_provider
+
+    extras: dict[str, Any] = {}
+    if spec.name == "google":
+        uses_oauth = getattr(manager.for_provider("google"), "uses_oauth", None)
+        extras["oauth"] = bool(uses_oauth()) if callable(uses_oauth) else False
+    provider = build_provider(
+        config,
+        credential=credential,
+        provider_name=spec.name,
+        model=model,
+        base_url=base_url,
+        **extras,
+    )
+    return provider.verify()
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +432,14 @@ def whoami(
     with _cli_errors():
         paths = _paths()
         config = _load(paths)
-        status = session.status(config, _store(), check=check)
+        from ..auth.manager import AuthenticationManager
+
+        status = session.status(
+            config,
+            _store(),
+            check=check,
+            sessions=AuthenticationManager().stored_sessions(),
+        )
         payload = {
             **status.as_dict(),
             "user_config": str(user_config_file()),

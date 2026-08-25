@@ -10,7 +10,7 @@ from datetime import date
 
 from rn_agent.analyzers import ANALYZERS
 from rn_agent.analyzers.android_analyzer import AndroidAnalyzer
-from rn_agent.analyzers.base import AnalyzerInput
+from rn_agent.analyzers.base import AnalyzerInput, summarize
 from rn_agent.analyzers.ios_analyzer import IOSAnalyzer
 from rn_agent.analyzers.js_analyzer import JavaScriptAnalyzer
 from rn_agent.analyzers.project_analyzer import ProjectAnalyzer
@@ -368,13 +368,67 @@ def test_missing_exported_attribute_is_critical(project):
     assert check and check.severity is Severity.CRITICAL
 
 
-def test_missing_module_permission_is_reported(project):
+def test_missing_module_permission_names_it_and_the_line_to_add(project):
+    """A count is not actionable: say which permission, and give the XML."""
     project.write_package_json(dependencies={"@react-native-firebase/messaging": "^21.0.0"})
     project.android(permissions=("android.permission.INTERNET",))
     checks = AndroidAnalyzer(analyzer_input(project)).run()
     check = find(checks, "android.permissions.missing")
     assert check and check.severity is Severity.HIGH
-    assert any("POST_NOTIFICATIONS" in value for value in check.evidence.values())
+    # The name is in the line the developer reads, not only in --verbose evidence.
+    assert "android.permission.POST_NOTIFICATIONS" in check.detail
+    # And who wants it, so removing the module is a visible alternative.
+    assert "@react-native-firebase/messaging" in check.detail
+    assert check.fix == [
+        "<!-- @react-native-firebase/messaging -->",
+        '<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
+    ]
+    # The file to edit is named, not left as "the manifest".
+    assert "AndroidManifest.xml" in (check.recommendation or "")
+
+
+def test_several_missing_permissions_are_all_listed(project):
+    project.write_package_json(
+        dependencies={
+            "react-native-ble-plx": "^3.2.0",
+            "react-native-vision-camera": "^4.6.0",
+        }
+    )
+    project.android(permissions=())
+    checks = AndroidAnalyzer(analyzer_input(project)).run()
+    check = find(checks, "android.permissions.missing")
+
+    assert check
+    for name in (
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.CAMERA",
+    ):
+        assert name in check.detail
+        assert f'<uses-permission android:name="{name}" />' in check.fix
+    # Each permission carries the module that needs it, as a manifest comment.
+    assert check.fix.count("<!-- react-native-ble-plx -->") == 2
+    assert "these" in (check.recommendation or "")
+
+
+def test_a_permission_two_modules_want_names_both(project):
+    project.write_package_json(
+        dependencies={
+            "@react-native-community/geolocation": "^3.3.0",
+            "react-native-geolocation-service": "^5.3.1",
+        }
+    )
+    project.android(permissions=())
+    checks = AndroidAnalyzer(analyzer_input(project)).run()
+    check = find(checks, "android.permissions.missing")
+
+    assert check
+    # One permission, two dependents: the XML must not be duplicated, and both
+    # modules must be named or removing one looks sufficient.
+    assert check.fix.count('<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />') == 1
+    comment = next(line for line in check.fix if line.startswith("<!--"))
+    assert "@react-native-community/geolocation" in comment
+    assert "react-native-geolocation-service" in comment
 
 
 def test_declared_module_permission_passes(project):
@@ -434,13 +488,23 @@ def test_deployment_target_helper_is_not_a_mismatch(project):
     assert find(checks, "ios.deployment_target").status is CheckStatus.PASS
 
 
-def test_missing_usage_description_is_critical(project):
+def test_missing_usage_description_names_the_key_and_the_plist_entry(project):
     project.write_package_json(dependencies={"react-native-vision-camera": "^4.6.0"})
     project.ios(usage_descriptions=())
     checks = IOSAnalyzer(analyzer_input(project)).run()
     check = find(checks, "ios.usage_descriptions")
     assert check and check.severity is Severity.CRITICAL
-    assert any("NSCameraUsageDescription" in value for value in check.evidence.values())
+    assert "NSCameraUsageDescription" in check.detail
+    assert "react-native-vision-camera" in check.detail
+    assert check.fix == [
+        "<!-- react-native-vision-camera -->",
+        "<key>NSCameraUsageDescription</key>",
+        "<string>Explain why the app needs this</string>",
+    ]
+    # An empty string is an App Store rejection, so the entry ships a prompt to
+    # replace rather than an empty <string/>.
+    assert "replacing each placeholder" in (check.recommendation or "")
+    assert "Info.plist" in (check.recommendation or "")
 
 
 def test_present_usage_description_passes(project):
@@ -577,3 +641,31 @@ def test_every_analyzer_survives_a_minimal_project(builder):
     for analyzer_class in ANALYZERS:
         checks = analyzer_class(data).run()
         assert isinstance(checks, list) and checks
+
+
+# ---------------------------------------------------------------------------
+# a finding names what it found
+# ---------------------------------------------------------------------------
+def test_a_finding_names_a_few_items_and_counts_the_rest():
+    """Naming everything can be a page; naming nothing is useless."""
+    assert summarize([]) == ""
+    assert summarize(["b", "a"]) == "a; b"
+    assert summarize(["c", "b", "a"]) == "a; b; c"
+    assert summarize(["d", "c", "b", "a"]) == "a; b; c; and 1 more"
+    assert summarize(["d", "c", "b", "a"], limit=4) == "a; b; c; d"
+
+
+def test_unsatisfied_peers_are_named_not_just_counted(project):
+    project.write_package_json(
+        dependencies={"react": "19.1.0", "react-native": "0.81.0", "some-lib": "1.0.0"}
+    )
+    project.installed("react", "19.1.0")
+    project.installed("react-native", "0.81.0")
+    project.installed("some-lib", "1.0.0", peer={"react": ">=20.0.0"})
+    checks = JavaScriptAnalyzer(analyzer_input(project)).run()
+    check = find(checks, "js.peer_dependencies.conflict")
+
+    assert check
+    # The package and the requirement are in the line the developer reads.
+    assert "some-lib" in check.detail
+    assert ">=20.0.0" in check.detail

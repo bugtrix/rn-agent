@@ -19,14 +19,17 @@ from ..core.command import AgentCommand, CommandOutcome
 from ..core.context import AgentContext
 from ..errors import RNAgentError
 from ..models.project import ProjectContext
-from . import auth, ui
+from . import auth, develop, maintain, runtime, ui
 from .options import OPTIONS
 
 app = typer.Typer(
     name="rn-agent",
     help=f"{APP_TITLE}: one agent for scanning, diagnosing, fixing and migrating React Native apps.",
     add_completion=False,
-    no_args_is_help=True,
+    # Bare `rn-agent` opens the interactive terminal rather than printing help:
+    # the agent is a place you work, and every subcommand still behaves exactly
+    # as it did. `--help` is one keystroke away and unchanged.
+    invoke_without_command=True,
     context_settings={"help_option_names": ["-h", "--help"]},
     pretty_exceptions_enable=False,
 )
@@ -38,8 +41,9 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit(0)
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_callback(
+    ctx: typer.Context,
     path: Annotated[
         Path | None,
         typer.Option("--path", "-C", help="Project directory (default: current directory)."),
@@ -64,27 +68,24 @@ def main_callback(
     OPTIONS.yes = yes
     OPTIONS.verbose = verbose
     OPTIONS.json_output = json_output
+    if ctx.invoked_subcommand is not None:
+        return
+    # No subcommand: open the terminal. Imported here so the AI and
+    # prompt_toolkit stacks stay out of `rn-agent scan`.
+    from ..tui.app import run as run_terminal
+
+    raise typer.Exit(
+        run_terminal(start=path, dry_run=dry_run, assume_yes=yes, verbose=verbose)
+    )
 
 
 def _build_context(command: str) -> AgentContext:
-    return AgentContext.create(
-        command=command,
-        start=OPTIONS.path,
-        dry_run=OPTIONS.dry_run,
-        assume_yes=OPTIONS.yes,
-        verbose=OPTIONS.verbose,
-        confirmer=ui.confirm,
-    )
+    return runtime.build_context(command)
 
 
 def _finish(outcome: CommandOutcome, payload: dict[str, Any] | None = None) -> None:
     """Render an error (if any) and exit with the command's code."""
-    if outcome.error is not None:
-        ui.error_panel(outcome.error.message, outcome.error.hint)
-        raise typer.Exit(outcome.exit_code)
-    if OPTIONS.json_output and payload is not None:
-        ui.console().print_json(json.dumps(payload, default=str))
-    raise typer.Exit(outcome.exit_code)
+    runtime.finish(outcome, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -256,16 +257,58 @@ def _credential_source(context: AgentContext) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# AI setup (login/logout/whoami/provider/model) attaches itself, so this router
-# never has to know those commands exist.
+# The other command groups attach themselves, so this router never has to know
+# which commands exist: AI setup (phase 2), development (phase 3) and
+# maintenance (phases 4-6).
 # ---------------------------------------------------------------------------
 auth.register(app)
+develop.register(app)
+maintain.register(app)
+
+
+#: Global flags live on the group, which Click requires *before* the subcommand.
+#: Developers reasonably type `rn-agent health --json`, so they are hoisted.
+#: ``--path`` takes a value; the rest are switches. No subcommand defines any of
+#: these names, so hoisting cannot shadow a command's own flag.
+GLOBAL_SWITCHES: frozenset[str] = frozenset(
+    {"--dry-run", "--yes", "-y", "--verbose", "-v", "--json", "--version"}
+)
+GLOBAL_VALUED: frozenset[str] = frozenset({"--path", "-C"})
+
+
+def hoist_global_flags(argv: list[str]) -> list[str]:
+    """Move group-level flags in front of the subcommand.
+
+    ``rn-agent health --json`` and ``rn-agent --json health`` are the same
+    request; only one of them parses without this.
+    """
+    globals_: list[str] = []
+    rest: list[str] = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":  # everything after this is positional
+            rest.extend(argv[index:])
+            break
+        if token in GLOBAL_SWITCHES:
+            globals_.append(token)
+        elif token in GLOBAL_VALUED and index + 1 < len(argv):
+            globals_.extend([token, argv[index + 1]])
+            index += 1
+        elif any(token.startswith(f"{name}=") for name in GLOBAL_VALUED | GLOBAL_SWITCHES):
+            globals_.append(token)
+        else:
+            rest.append(token)
+        index += 1
+    return [*globals_, *rest]
 
 
 def main() -> None:
     """Console-script entry point."""
+    import sys
+
     try:
-        app()
+        app(args=hoist_global_flags(sys.argv[1:]))
     except RNAgentError as error:  # pragma: no cover - safety net
         ui.error_panel(error.message, error.hint)
         raise SystemExit(error.exit_code) from error

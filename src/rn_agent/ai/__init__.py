@@ -10,6 +10,7 @@ upstream React Native diffs use the same seam.
 from __future__ import annotations
 
 from .anthropic import AnthropicProvider
+from .google import GoogleProvider
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .provider import AIProvider, ProviderIdentity
@@ -29,6 +30,7 @@ __all__ = [
     "AIProvider",
     "AnthropicProvider",
     "Completion",
+    "GoogleProvider",
     "Message",
     "OllamaProvider",
     "OpenAIProvider",

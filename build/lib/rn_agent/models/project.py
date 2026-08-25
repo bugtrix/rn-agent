@@ -140,6 +140,9 @@ class IOSInfo(Base):
     bundle_identifier: str | None = None
     display_name: str | None = None
     privacy_manifest: bool = False
+    #: Where the usage descriptions were read from, so a check can name the file
+    #: a developer has to edit rather than guessing at the conventional path.
+    info_plist: str | None = None
     usage_descriptions: list[str] = Field(default_factory=list)
     entitlements: list[str] = Field(default_factory=list)
     app_delegate: str | None = None

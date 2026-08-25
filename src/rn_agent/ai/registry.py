@@ -14,9 +14,12 @@ from ..errors import ProviderError
 from ..models.config import AIConfig
 from ..net.http import JsonTransport
 from .anthropic import AnthropicProvider
+from .cursor import CursorProvider
+from .google import GoogleProvider
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .provider import AIProvider
+from .vertex import VertexAnthropicProvider
 
 #: Names developers actually type, mapped to the canonical provider name.
 ALIASES: dict[str, str] = {
@@ -24,8 +27,16 @@ ALIASES: dict[str, str] = {
     "claude-code": "anthropic",
     "gpt": "openai",
     "chatgpt": "openai",
+    "gemini": "google",
+    "google-gemini": "google",
     "local": "ollama",
     "llama": "ollama",
+    "claude-vertex": "vertex",
+    "vertex-anthropic": "vertex",
+    "vertex-claude": "vertex",
+    "cursor-agent": "cursor",
+    "cursor-cli": "cursor",
+    "composer": "cursor",
 }
 
 
@@ -75,6 +86,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
     for spec in (
         ProviderSpec.of(AnthropicProvider),
         ProviderSpec.of(OpenAIProvider),
+        ProviderSpec.of(GoogleProvider),
+        ProviderSpec.of(VertexAnthropicProvider),
+        ProviderSpec.of(CursorProvider),
         ProviderSpec.of(OllamaProvider),
     )
 }
@@ -119,8 +133,15 @@ def build_provider(
     base_url: str | None = None,
     transport: JsonTransport | None = None,
     logger: logging.Logger | None = None,
+    **extra: Any,
 ) -> AIProvider:
-    """Instantiate the configured provider. Never performs a request."""
+    """Instantiate the configured provider. Never performs a request.
+
+    ``extra`` carries the flags only some providers take - whether a Google
+    credential is an OAuth bearer or a key, which Cloud project pays for a
+    Vertex call. Passing them here keeps the caller from having to know which
+    class it is about to build.
+    """
     spec = resolve_spec(provider_name or config.provider)
     return spec.provider_class(
         credential=credential,
@@ -131,4 +152,5 @@ def build_provider(
         temperature=config.temperature,
         transport=transport,
         logger=logger,
+        **extra,
     )

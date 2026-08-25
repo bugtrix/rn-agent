@@ -9,6 +9,7 @@ side effect allowed is running a read-only external tool (``tsc --noEmit``,
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,7 @@ class Analyzer(ABC):
         severity: Severity = Severity.INFO,
         detail: str = "",
         recommendation: str | None = None,
+        fix: Sequence[str] | None = None,
         evidence: dict[str, str] | None = None,
         source: str | None = None,
         docs: str | None = None,
@@ -77,6 +79,7 @@ class Analyzer(ABC):
             severity=severity if status in (CheckStatus.FAIL, CheckStatus.WARN) else Severity.INFO,
             detail=detail,
             recommendation=recommendation,
+            fix=list(fix or ()),
             evidence={k: str(v) for k, v in (evidence or {}).items() if v is not None},
             source=source,
             docs=docs,
@@ -110,3 +113,19 @@ class Analyzer(ABC):
     def skip(self, check_id: str, title: str, detail: str, **kwargs: Any) -> HealthCheck:
         """Used whenever the facts are unavailable - never a fabricated warning."""
         return self.check(check_id, title, CheckStatus.SKIP, detail=detail, **kwargs)
+
+
+def summarize(items: Sequence[str], *, limit: int = 3) -> str:
+    """Name the first few items, then count the rest.
+
+    A finding that says "3 packages" and hides the names forces the developer to
+    re-run with ``--verbose`` to learn anything, so every problem detail names
+    what it found. The cap keeps one finding from becoming a page.
+    """
+    ordered = sorted(items)
+    if not ordered:
+        return ""
+    if len(ordered) <= limit:
+        return "; ".join(ordered)
+    shown = "; ".join(ordered[:limit])
+    return f"{shown}; and {len(ordered) - limit} more"

@@ -60,6 +60,10 @@ class HealthCheck(BaseModel):
     severity: Severity = Severity.INFO
     detail: str = ""
     recommendation: str | None = None
+    #: The literal lines to add or change, ready to paste. Distinct from
+    #: ``recommendation``: that says what to do, this *is* what to write. A
+    #: developer should never have to work out the exact syntax from prose.
+    fix: list[str] = Field(default_factory=list)
     evidence: dict[str, str] = Field(default_factory=dict)
     source: str | None = None
     docs: str | None = None

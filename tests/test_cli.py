@@ -18,12 +18,34 @@ def invoke(*args: str):
 
 
 # --- basics ----------------------------------------------------------------
-def test_no_arguments_shows_help():
-    result = invoke()
-    # Click's convention for "no command given" is exit code 2 (usage).
+def test_no_arguments_opens_the_terminal(project):
+    """Bare `rn-agent` is the interactive terminal, not a usage message.
+
+    Under pytest there is no tty, so the terminal prints its status and the
+    command list instead of taking over the screen - which is exactly what a
+    piped session or a CI job should get.
+    """
+    result = invoke("--path", str(project.root))
+
+    assert result.exit_code == 0, result.output
+    assert "React Native Agent" in result.output
+    assert "/login" in result.output and "/migrate" in result.output
+    assert "not interactive" in result.output
+
+
+def test_no_arguments_outside_a_project_explains_itself(tmp_path: Path):
+    result = invoke("--path", str(tmp_path))
+
     assert result.exit_code == 2
-    assert "scan" in result.output
-    assert "health" in result.output
+    assert "package.json" in result.output
+
+
+def test_help_still_lists_every_command():
+    result = invoke("--help")
+
+    assert result.exit_code == 0
+    for name in ("scan", "health", "review", "migrate", "release"):
+        assert name in result.output
 
 
 def test_version_flag():

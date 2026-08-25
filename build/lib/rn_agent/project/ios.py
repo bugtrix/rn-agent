@@ -150,6 +150,7 @@ def analyze_ios(root: Path, *, declared_rn_version: str | None = None) -> tuple[
         bundle_identifier=bundle_identifier,
         display_name=str(display_name) if isinstance(display_name, str) else None,
         privacy_manifest=privacy_manifest,
+        info_plist=_relative(info_plist_path, root),
         usage_descriptions=usage_descriptions,
         entitlements=entitlements,
         app_delegate=_relative(app_delegate, root),

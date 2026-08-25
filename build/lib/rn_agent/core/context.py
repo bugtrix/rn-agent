@@ -38,6 +38,7 @@ from .paths import AgentPaths
 if TYPE_CHECKING:  # the AI stack is imported on first use, not at startup
     from ..ai.provider import AIProvider
     from ..ai.types import Completion
+    from ..auth.manager import AuthenticationManager
     from ..auth.store import CredentialStore
 
 
@@ -172,6 +173,19 @@ class AgentContext:
         return build_store(logger=get_logger("auth"))
 
     @cached_property
+    def auth(self) -> AuthenticationManager:
+        """Every sign-in mechanism, in one object.
+
+        This - not the credential store - is what resolves the value a request
+        authenticates with, because a provider may be connected by OAuth rather
+        than by a key. The store stays available for the key-only paths that
+        still want it (`whoami`, the credential index).
+        """
+        from ..auth.manager import AuthenticationManager
+
+        return AuthenticationManager(logger=get_logger("auth"))
+
+    @cached_property
     def ai(self) -> AIProvider:
         """The configured provider, built from *your* credential.
 
@@ -188,13 +202,42 @@ class AgentContext:
                 hint="Set ai.enabled: true in .rn-agent/config.yaml to use AI commands.",
             )
         spec = resolve_spec(self.config.ai.provider)
-        credential = self.credentials.require(spec)
+        authenticator = self.auth.for_provider(spec.name)
+        credential = authenticator.credential()
+        if spec.requires_credential and not credential:
+            raise ProviderError(
+                f"{spec.name} is not connected",
+                hint=authenticator.connect_hint(),
+            )
         return build_provider(
             self.config.ai,
-            credential=credential.value if credential else None,
+            credential=credential,
             provider_name=spec.name,
             logger=get_logger("ai"),
+            **self._provider_extras(spec.name),
         )
+
+    def _provider_extras(self, provider: str) -> dict[str, Any]:
+        """Construction flags that depend on *how* this provider was connected.
+
+        Google's API takes a key in one header and an OAuth token in another, so
+        the provider must be told which it was handed. Asking the authenticator
+        keeps the request in step with the auth method the UI displays.
+
+        Vertex needs the Cloud project and location instead: the model lives at a
+        project-scoped URL, and that project is what gets billed.
+        Cursor is a local CLI rather than an API, so it needs the directory to
+        read: the project root, not wherever the terminal happens to be.
+        """
+        if provider == "cursor":
+            return {"workspace": str(self.paths.project_root)}
+        if provider == "vertex":
+            return {"project": self.config.ai.project, "region": self.config.ai.region}
+        if provider != "google":
+            return {}
+        authenticator = self.auth.for_provider(provider)
+        uses_oauth = getattr(authenticator, "uses_oauth", None)
+        return {"oauth": bool(uses_oauth()) if callable(uses_oauth) else False}
 
     def ai_ready(self) -> bool:
         """Whether an AI request could be made - no network, no exception."""
@@ -235,6 +278,44 @@ class AgentContext:
 
     def has_project_context(self) -> bool:
         return self._project_context is not None or self.paths.context_file.is_file()
+
+    def ensure_project(
+        self,
+        *,
+        refresh: bool = False,
+        probe_tools: bool = False,
+        stale_seconds: float = 24 * 60 * 60,
+    ) -> tuple[ProjectContext, bool]:
+        """The brain, rescanned when it is missing, stale or unusable.
+
+        Returns ``(project, refreshed)``. Every command past phase 1 uses this
+        rather than raising ``ProjectNotScanned``: a developer should not have to
+        remember to re-run ``scan`` before asking a question about their project,
+        and a stale answer is worse than a two-second rescan.
+        """
+        from ..project.scanner import ProjectScanner, context_age_seconds, save_context
+
+        age = context_age_seconds(self.paths)
+        stale = age is not None and age > stale_seconds
+        if not refresh and not stale and self.has_project_context():
+            try:
+                return self.project, False
+            except Exception as exc:  # a corrupt context file must not be fatal
+                self.logger.warning("stored context unusable (%s); rescanning", exc)
+
+        scanner = ProjectScanner(self.detected, self.paths, self.runner, knowledge=self.knowledge)
+        project = scanner.scan(
+            probe_tools=probe_tools,
+            git_info=self.git.describe(),
+            source_stats=self.walker.stats(),
+        )
+        self.set_project(project)
+        if not self.dry_run:
+            try:
+                save_context(self.paths, project)
+            except OSError as exc:  # pragma: no cover - read-only project
+                self.logger.warning("could not persist refreshed context: %s", exc)
+        return project, True
 
     # -- run bookkeeping ---------------------------------------------------
     def begin_run(self) -> int | None:

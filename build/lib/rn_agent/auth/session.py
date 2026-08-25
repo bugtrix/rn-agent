@@ -9,16 +9,17 @@ caller's decision (user-level by default, project-level with ``--project``).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from ..ai.http import JsonTransport
 from ..ai.provider import AIProvider, ProviderIdentity
 from ..ai.registry import ProviderSpec, build_provider, resolve_spec
 from ..core.logging import get_logger
 from ..errors import ProviderError
 from ..models.config import AIConfig
+from ..net.http import JsonTransport
 from .keychain import select_backend
 from .store import Credential, CredentialStore
 
@@ -131,10 +132,14 @@ def status(
     base_url: str | None = None,
     check: bool = False,
     transport: JsonTransport | None = None,
+    sessions: Sequence[str] = (),
 ) -> AuthStatus:
     """Describe the current setup; only touches the network when ``check``."""
     name = provider_name or config.provider
-    stored = tuple(entry.provider for entry in store.stored())
+    # "Stored" means any credential this machine holds: a key in the index, or
+    # an OAuth session in the token store. Reporting only keys would tell a
+    # developer who just signed in with a browser that nothing is stored.
+    stored = tuple(sorted({entry.provider for entry in store.stored()} | set(sessions)))
     location = None if store.backend.secure else str(store.backend.secrets_file)
     if not name:
         return AuthStatus(

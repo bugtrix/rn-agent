@@ -9,6 +9,7 @@ caller's decision (user-level by default, project-level with ``--project``).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -131,10 +132,14 @@ def status(
     base_url: str | None = None,
     check: bool = False,
     transport: JsonTransport | None = None,
+    sessions: Sequence[str] = (),
 ) -> AuthStatus:
     """Describe the current setup; only touches the network when ``check``."""
     name = provider_name or config.provider
-    stored = tuple(entry.provider for entry in store.stored())
+    # "Stored" means any credential this machine holds: a key in the index, or
+    # an OAuth session in the token store. Reporting only keys would tell a
+    # developer who just signed in with a browser that nothing is stored.
+    stored = tuple(sorted({entry.provider for entry in store.stored()} | set(sessions)))
     location = None if store.backend.secure else str(store.backend.secrets_file)
     if not name:
         return AuthStatus(

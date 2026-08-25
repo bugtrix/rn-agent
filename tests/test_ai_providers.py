@@ -246,7 +246,8 @@ def test_aliases_developers_actually_type():
     assert canonical_name("claude") == "anthropic"
     assert resolve_spec("gpt").name == "openai"
     assert resolve_spec("Anthropic").name == "anthropic"
-    assert set(provider_names()) == {"anthropic", "openai", "ollama"}
+    assert resolve_spec("gemini").name == "google"
+    assert set(provider_names()) == {"anthropic", "openai", "google", "vertex", "cursor", "ollama"}
 
 
 def test_unknown_provider_lists_the_known_ones():

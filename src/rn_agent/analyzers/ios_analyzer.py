@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ..models.health import Category, CheckStatus, HealthCheck, Severity
 from ..utils.semver import coerce
-from .base import Analyzer
+from .base import Analyzer, summarize
 
 PRIVACY_DOCS = (
     "https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api"
@@ -188,8 +188,9 @@ class IOSAnalyzer(Analyzer):
     def _usage_descriptions(self) -> list[HealthCheck]:
         ios = self.project.ios
         declared = set(ios.usage_descriptions)
-        missing: list[str] = []
-        advisory: list[str] = []
+        missing: dict[str, list[str]] = {}
+        advisory: dict[str, list[str]] = {}
+        sources: dict[str, str] = {}
         for dependency in self.project.dependencies:
             requirement = self.knowledge.permission_for(dependency.name)
             if requirement is None:
@@ -197,11 +198,10 @@ class IOSAnalyzer(Analyzer):
             for key in requirement.ios_keys:
                 if key in declared:
                     continue
-                entry = f"{key} (needed by {dependency.name})"
-                if requirement.required:
-                    missing.append(entry)
-                else:
-                    advisory.append(entry)
+                bucket = missing if requirement.required else advisory
+                bucket.setdefault(key, []).append(dependency.name)
+                if requirement.source and key not in sources:
+                    sources[key] = requirement.source
 
         checks: list[HealthCheck] = []
         if missing:
@@ -209,15 +209,21 @@ class IOSAnalyzer(Analyzer):
                 self.fail(
                     "ios.usage_descriptions",
                     "Info.plist usage descriptions",
-                    f"{len(missing)} required usage description(s) are missing.",
+                    _keys_detail(missing, required=True),
                     severity=Severity.CRITICAL,
                     recommendation=(
-                        "Add the keys to ios/<App>/Info.plist. iOS terminates the app the first "
-                        "time the API is used without them."
+                        f"Add {'this' if len(missing) == 1 else 'these'} to "
+                        f"{ios.info_plist or 'ios/<App>/Info.plist'} inside the top-level "
+                        "<dict>, replacing each placeholder with the sentence the user will "
+                        "read in the permission prompt:"
                     ),
+                    fix=_plist_lines(missing),
                     evidence={
-                        f"missing_{index + 1}": item for index, item in enumerate(sorted(missing)[:6])
-                    },
+                        key: f"needed by {', '.join(modules)}"
+                        for key, modules in sorted(missing.items())
+                    }
+                    | {f"docs:{key}": url for key, url in sorted(sources.items()) if key in missing},
+                    docs="https://developer.apple.com/documentation/bundleresources/information_property_list",
                 )
             )
         else:
@@ -234,10 +240,11 @@ class IOSAnalyzer(Analyzer):
                     "ios.usage_descriptions.optional",
                     "Optional usage descriptions",
                     CheckStatus.PASS,
-                    detail=f"{len(advisory)} optional key(s) not declared (only needed for some features).",
+                    detail=_keys_detail(advisory, required=False),
+                    fix=_plist_lines(advisory),
                     evidence={
-                        f"optional_{index + 1}": item
-                        for index, item in enumerate(sorted(advisory)[:4])
+                        key: f"only if you use {', '.join(modules)}'s optional features"
+                        for key, modules in sorted(advisory.items())
                     },
                 )
             )
@@ -271,3 +278,36 @@ class IOSAnalyzer(Analyzer):
             f"{len(ios.entitlements)} entitlements file(s) present",
             evidence={"files": ", ".join(ios.entitlements[:3])},
         )
+
+#: iOS shows this string in the permission prompt, so an empty value is both a
+#: bad prompt and an App Store rejection.
+_PLACEHOLDER = "<string>Explain why the app needs this</string>"
+
+
+def _keys_detail(keys: dict[str, list[str]], *, required: bool) -> str:
+    """One key is named inline; several are counted, with names in the paste."""
+    crash = "iOS terminates the app the first time the API is used."
+    if required:
+        if len(keys) == 1:
+            key, modules = next(iter(keys.items()))
+            return f"{key} is required by {', '.join(modules)} but is missing. {crash}"
+        return (
+            f"{len(keys)} required usage descriptions are missing: "
+            + summarize(sorted(keys), limit=4)
+            + f". {crash}"
+        )
+    return (
+        f"{len(keys)} optional key(s) not declared, only needed for some features: "
+        + summarize(sorted(keys), limit=4)
+        + "."
+    )
+
+
+def _plist_lines(keys: dict[str, list[str]]) -> list[str]:
+    """The plist entries to paste, annotated with the module that needs each."""
+    lines: list[str] = []
+    for key in sorted(keys):
+        lines.append(f"<!-- {', '.join(keys[key])} -->")
+        lines.append(f"<key>{key}</key>")
+        lines.append(_PLACEHOLDER)
+    return lines

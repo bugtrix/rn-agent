@@ -13,7 +13,7 @@ from pathlib import Path
 from ..models.health import Category, HealthCheck, Severity
 from ..utils.io import read_json
 from ..utils.semver import coerce, is_undecidable_range, satisfies
-from .base import Analyzer
+from .base import Analyzer, summarize
 
 MAX_REPORTED = 6
 
@@ -218,7 +218,8 @@ class JavaScriptAnalyzer(Analyzer):
                 self.warn(
                     "js.peer_dependencies.conflict",
                     "Peer dependencies satisfied",
-                    f"{len(conflicts)} unsatisfied peer requirement(s).",
+                    f"{len(conflicts)} unsatisfied peer requirement(s): "
+                    f"{summarize(conflicts)}.",
                     severity=Severity.MEDIUM,
                     recommendation="Align these versions before upgrading React Native.",
                     evidence={
@@ -241,7 +242,8 @@ class JavaScriptAnalyzer(Analyzer):
                 self.fail(
                     "js.peer_dependencies.missing",
                     "Core peer dependencies installed",
-                    f"{len(unmet)} package(s) require a core peer that is not installed.",
+                    f"{len(unmet)} package(s) require a core peer that is not installed: "
+                    f"{summarize(unmet)}.",
                     severity=Severity.HIGH,
                     recommendation=f"Run `{self.project.package_manager.install_command}`.",
                     evidence={
@@ -297,7 +299,8 @@ class JavaScriptAnalyzer(Analyzer):
             self.warn(
                 "js.duplicate_declaration",
                 "Duplicate dependency declarations",
-                f"{len(overlap)} package(s) appear in both dependencies and devDependencies.",
+                f"{len(overlap)} package(s) in both dependencies and devDependencies: "
+                f"{summarize(overlap, limit=6)}.",
                 severity=Severity.LOW,
                 recommendation="Keep each package in a single section to avoid version drift.",
                 evidence={"packages": ", ".join(overlap[:MAX_REPORTED])},

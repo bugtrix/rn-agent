@@ -200,6 +200,76 @@ def test_login_remembers_a_custom_api_host(tmp_path, wired_transport):
     assert user_config(tmp_path)["ai"]["base_url"] == "http://gpu.box:11434"
     assert wired_transport.last["url"] == "http://gpu.box:11434/api/tags"
 
+def device_transport(monkeypatch, transport):
+    """A device-grant login, with no browser and no network."""
+    transport.queue(
+        body={
+            "device_code": "dev",
+            "user_code": "WXYZ-1234",
+            "verification_url": "https://www.google.com/device",
+            "interval": 0,
+            "expires_in": 900,
+        }
+    )
+    transport.queue(body={"access_token": "ya29.tok", "refresh_token": "1//r", "expires_in": 3600})
+    monkeypatch.setattr("rn_agent.auth.oauth.default_transport", lambda: transport)
+    return transport
+
+
+def test_login_vertex_records_the_project_that_pays(tmp_path, monkeypatch, transport):
+    """Vertex bills a Cloud project, so the flag has to survive the login."""
+    device_transport(monkeypatch, transport)
+    client = tmp_path / "client_secret.json"
+    client.write_text('{"installed": {"client_id": "cid.apps", "client_secret": "shh"}}')
+
+    result = invoke(
+        "login",
+        "vertex",
+        "--client-file",
+        str(client),
+        "--device",
+        "--cloud-project",
+        "billed-project",
+        "--region",
+        "us-east5",
+        "--no-verify",
+    )
+
+    assert result.exit_code == 0, result.output
+    written = user_config(tmp_path)["ai"]
+    assert written["provider"] == "vertex"
+    assert written["project"] == "billed-project"
+    assert written["region"] == "us-east5"
+    # It says what will actually happen: a code to type, not a browser it
+    # cannot open.
+    assert "WXYZ-1234" in result.output
+    assert "No browser here" in result.output
+
+
+def test_login_vertex_says_it_is_a_google_sign_in_not_an_anthropic_key():
+    """Without an OAuth client it must refuse - and name the file to download."""
+    result = invoke("login", "vertex", "--cloud-project", "p", "--no-verify")
+
+    assert result.exit_code == 10
+    assert "Google" in result.output
+    assert "--client-file" in result.output
+    # No Anthropic key is involved on this path, so none may be suggested.
+    assert "ANTHROPIC_API_KEY" not in result.output
+
+
+def test_login_vertex_shares_the_google_session(tmp_path, monkeypatch, transport):
+    """One Google account: signing in for Vertex also connects Gemini."""
+    device_transport(monkeypatch, transport)
+    client = tmp_path / "client_secret.json"
+    client.write_text('{"installed": {"client_id": "cid.apps"}}')
+
+    invoke("login", "vertex", "--client-file", str(client), "--device", "--no-verify")
+    result = invoke("--json", "whoami")
+
+    payload = json.loads(result.output)
+    assert "google" in payload["stored_providers"]
+
+
 
 def test_login_without_a_key_and_without_a_tty_explains_the_options(tmp_path):
     result = invoke("login", "anthropic")
@@ -337,3 +407,30 @@ def test_info_shows_the_ai_setup_after_a_login(project):
     assert result.exit_code == 0
     assert "openai" in result.output
     assert "rn-agent whoami" in result.output
+
+
+# --- a provider that needs no credential but accepts one -------------------
+def test_an_explicit_key_is_stored_even_when_the_provider_needs_none(tmp_path):
+    """Cursor's CLI holds its own session, so `login cursor` never prompts for a
+    key - but `--stdin` is how CI supplies CURSOR_API_KEY, and dropping it would
+    make the documented CI path silently do nothing."""
+    result = invoke("login", "cursor", "--stdin", "--no-verify", stdin="cur_key_0123456789")
+
+    assert result.exit_code == 0, result.output
+    assert "cur_key_0123456789" in secrets_text(tmp_path)
+    payload = json.loads(invoke("--json", "whoami").output)
+    assert payload["provider"] == "cursor"
+    assert "cursor" in payload["stored_providers"]
+    # Masked in the report, never echoed.
+    assert "cur_key_0123456789" not in result.output
+
+
+def test_no_key_is_ever_prompted_for_a_tool_provider(tmp_path):
+    """With no --api-key and no --stdin there is nothing to ask for: the tool is
+    already signed in, and a prompt would imply otherwise."""
+    result = invoke("login", "cursor", "--no-verify")
+
+    assert result.exit_code == 0, result.output
+    assert "API key" not in result.output
+    assert secrets_text(tmp_path) == ""
+    assert "cursor-agent login" in result.output

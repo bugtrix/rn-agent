@@ -94,6 +94,35 @@ def test_fix_by_issue_id_reads_the_recorded_finding(project, fake_ai, ai_config)
     assert outcome.exit_code == 0
 
 
+def test_a_findings_exact_lines_are_sent_rather_than_re_derived(project, fake_ai, ai_config):
+    """`health` already worked out the XML; the model should not guess it again."""
+    seed_findings(
+        project,
+        [
+            {
+                "id": "android.permissions.missing",
+                "title": "Permissions match installed modules",
+                "detail": "android.permission.CAMERA is required by react-native-vision-camera.",
+                "recommendation": "Add this to android/app/src/main/AndroidManifest.xml:",
+                "fix": [
+                    "<!-- react-native-vision-camera -->",
+                    '<uses-permission android:name="android.permission.CAMERA" />',
+                ],
+                "severity": "high",
+                "file": TARGET,
+            }
+        ],
+    )
+    fake_ai.reply(proposal())
+
+    run(project, config=ai_config, issues=("android.permissions.missing",), checks=())
+
+    prompt = fake_ai.last_prompt
+    assert '<uses-permission android:name="android.permission.CAMERA" />' in prompt
+    assert "android.permission.CAMERA" in prompt
+
+
+
 def test_an_unknown_issue_id_alone_is_refused(project, fake_ai, ai_config):
     command, outcome = run(project, config=ai_config, issues=("nope.nothing",))
 

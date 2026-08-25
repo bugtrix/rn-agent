@@ -38,6 +38,7 @@ from .paths import AgentPaths
 if TYPE_CHECKING:  # the AI stack is imported on first use, not at startup
     from ..ai.provider import AIProvider
     from ..ai.types import Completion
+    from ..auth.manager import AuthenticationManager
     from ..auth.store import CredentialStore
 
 
@@ -172,6 +173,19 @@ class AgentContext:
         return build_store(logger=get_logger("auth"))
 
     @cached_property
+    def auth(self) -> AuthenticationManager:
+        """Every sign-in mechanism, in one object.
+
+        This - not the credential store - is what resolves the value a request
+        authenticates with, because a provider may be connected by OAuth rather
+        than by a key. The store stays available for the key-only paths that
+        still want it (`whoami`, the credential index).
+        """
+        from ..auth.manager import AuthenticationManager
+
+        return AuthenticationManager(logger=get_logger("auth"))
+
+    @cached_property
     def ai(self) -> AIProvider:
         """The configured provider, built from *your* credential.
 
@@ -188,13 +202,42 @@ class AgentContext:
                 hint="Set ai.enabled: true in .rn-agent/config.yaml to use AI commands.",
             )
         spec = resolve_spec(self.config.ai.provider)
-        credential = self.credentials.require(spec)
+        authenticator = self.auth.for_provider(spec.name)
+        credential = authenticator.credential()
+        if spec.requires_credential and not credential:
+            raise ProviderError(
+                f"{spec.name} is not connected",
+                hint=authenticator.connect_hint(),
+            )
         return build_provider(
             self.config.ai,
-            credential=credential.value if credential else None,
+            credential=credential,
             provider_name=spec.name,
             logger=get_logger("ai"),
+            **self._provider_extras(spec.name),
         )
+
+    def _provider_extras(self, provider: str) -> dict[str, Any]:
+        """Construction flags that depend on *how* this provider was connected.
+
+        Google's API takes a key in one header and an OAuth token in another, so
+        the provider must be told which it was handed. Asking the authenticator
+        keeps the request in step with the auth method the UI displays.
+
+        Vertex needs the Cloud project and location instead: the model lives at a
+        project-scoped URL, and that project is what gets billed.
+        Cursor is a local CLI rather than an API, so it needs the directory to
+        read: the project root, not wherever the terminal happens to be.
+        """
+        if provider == "cursor":
+            return {"workspace": str(self.paths.project_root)}
+        if provider == "vertex":
+            return {"project": self.config.ai.project, "region": self.config.ai.region}
+        if provider != "google":
+            return {}
+        authenticator = self.auth.for_provider(provider)
+        uses_oauth = getattr(authenticator, "uses_oauth", None)
+        return {"oauth": bool(uses_oauth()) if callable(uses_oauth) else False}
 
     def ai_ready(self) -> bool:
         """Whether an AI request could be made - no network, no exception."""

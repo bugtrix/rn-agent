@@ -12,6 +12,7 @@ from typing import Any
 
 from rich.box import ROUNDED
 from rich.console import Console
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -125,6 +126,32 @@ def bullet(text: str, *, style: str = "info", marker: str = "\u2192") -> None:
 
 def note(text: str) -> None:
     console().print(f"  [muted]{text}[/muted]")
+
+
+def indented(text: str, *, indent: int = 6, style: str | None = None) -> None:
+    """Print wrapped text where continuation lines keep the indent.
+
+    A plain ``print(f"      {text}")`` wraps back to column 0, which turns a
+    two-line finding into something that reads like two findings.
+    """
+    body = Text(text, style=style or "")
+    console().print(Padding(body, (0, 0, 0, indent)))
+
+
+
+def code(line: str, *, indent: int = 8, style: str = "value") -> None:
+    """Print a line meant to be copied, never broken by the renderer.
+
+    Rich would wrap a long ``<uses-permission .../>`` mid-attribute, and a
+    developer pasting that gets malformed XML. A wrapped URL is just as broken.
+    Letting the terminal soft-wrap keeps the copy buffer correct.
+    """
+    console().print(
+        Text(" " * indent + line, style=style),
+        no_wrap=True,
+        overflow="ignore",
+        crop=False,
+    )
 
 
 def success(text: str) -> None:

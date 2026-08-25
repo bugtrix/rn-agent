@@ -8,12 +8,13 @@ your git state. It is built for real production apps — the ones with 100+
 dependencies, 35 native modules, a Gradle `ext` block and a Podfile you did not
 write yourself.
 
-> **Status: complete through phase 6.** Every command on the roadmap is
-> implemented, tested and usable today: `scan`, `health`, `info`, the AI setup
-> commands (`login`, `logout`, `whoami`, `provider`, `model`), the development
-> commands (`review`, `fix`, `feature`, `test`), and the maintenance commands
-> (`upgrade`, `migrate`, `compatibility`, `docs`, `release`). Nothing in this
-> repository fakes an AI response or pretends a command exists before it works.
+> **Status: complete through phase 7.** Every command on the roadmap works, and
+> `rn-agent` on its own opens an interactive terminal: `scan`, `health`, `info`,
+> the account commands (`login`, `logout`, `whoami`, `provider`, `model`), the
+> development commands (`review`, `fix`, `feature`, `test`), and the maintenance
+> commands (`upgrade`, `migrate`, `compatibility`, `docs`, `release`). Nothing in
+> this repository fakes an AI response, invents a usage figure, or pretends a
+> command exists before it works.
 
 ---
 
@@ -23,19 +24,41 @@ write yourself.
 npm install -g rn-agent          # Node wrapper, owns a private Python runtime
 
 cd my-react-native-project
-rn-agent scan                    # build the shared project brain
-rn-agent health                  # real diagnostics: RN, JS, Android, iOS
+rn-agent                         # the interactive terminal
 ```
 
-Nothing is sent anywhere. `scan` and `health` are 100 % local and deterministic —
-zero AI calls, zero network requests.
+```
+╭──────────────────────────────────────────────╮
+│ React Native Agent  0.1.0                    │
+│ React Native AI Engineering Agent            │
+│                                              │
+│ Project   MyApp                              │
+│ RN        0.81.0                             │
+│ Provider  Anthropic  auth: API Key · connected│
+│ Model     claude-sonnet-4-5                  │
+╰──────────────────────────────────────────────╯
+  /help for commands · /login to connect · Ctrl+K palette · Ctrl+D to exit
 
-Ready for the AI half? Connect your own account, on your own key:
+> /scan
+> Fix my Android build
+  Anthropic · claude-sonnet-4-5 · RN 0.81.0 · Git clean
+```
+
+Inside the terminal: `/login` to connect an account, `/model` to switch model
+mid-conversation, `Ctrl+K` for a fuzzy command palette, `/migrate` for the
+migration wizard. Plain prose is either routed to the matching command (with your
+confirmation) or answered with your project as context.
+
+Every command also works non-interactively, unchanged:
 
 ```bash
-rn-agent login anthropic         # or openai, or ollama for a local model
-rn-agent whoami
+rn-agent scan                    # build the shared project brain
+rn-agent health --json           # real diagnostics: RN, JS, Android, iOS
+rn-agent migrate --to 0.86.0 --dry-run
 ```
+
+`scan` and `health` are 100 % local and deterministic — zero AI calls, zero
+network requests.
 
 ---
 
@@ -47,20 +70,21 @@ rn-agent whoami
 4. [Commands](#commands)
 5. [rn-agent scan](#rn-agent-scan)
 6. [rn-agent health](#rn-agent-health)
-7. [Setting up AI](#setting-up-ai)
-8. [Daily development: review, fix, feature, test](#daily-development)
-9. [Maintenance: upgrade, compatibility, migrate](#maintenance)
-10. [Shipping: docs and release](#shipping)
-11. [Configuration](#configuration)
-12. [The shared project brain](#the-shared-project-brain)
-13. [Architecture](#architecture)
-14. [Security](#security)
-15. [Safety](#safety)
-16. [Logs and state](#logs-and-state)
-17. [Development](#development)
-18. [Testing](#testing)
-19. [Troubleshooting](#troubleshooting)
-20. [Roadmap](#roadmap)
+7. [The interactive terminal](#the-interactive-terminal)
+8. [Setting up AI](#setting-up-ai)
+9. [Daily development: review, fix, feature, test](#daily-development)
+10. [Maintenance: upgrade, compatibility, migrate](#maintenance)
+11. [Shipping: docs and release](#shipping)
+12. [Configuration](#configuration)
+13. [The shared project brain](#the-shared-project-brain)
+14. [Architecture](#architecture)
+15. [Security](#security)
+16. [Safety](#safety)
+17. [Logs and state](#logs-and-state)
+18. [Development](#development)
+19. [Testing](#testing)
+20. [Troubleshooting](#troubleshooting)
+21. [Roadmap](#roadmap)
 
 ---
 
@@ -158,6 +182,7 @@ rn-agent --version
 | `rn-agent compatibility` | ✅ Phase 6 | Check the project against a React Native version before migrating |
 | `rn-agent docs` | ✅ Phase 6 | Write project documentation from the scanned facts |
 | `rn-agent release` | ✅ Phase 6 | Bump every version an app carries, and write the changelog |
+| `rn-agent delegate` | ✅ Phase 8 | Hand a task to the Cursor agent, then audit and validate what it changed |
 
 Global flags:
 
@@ -245,6 +270,26 @@ rn-agent --json health              # the full report as JSON
 Exit code is `1` when any **critical** issue is found (or the score is below
 `--fail-under`), so it drops straight into CI.
 
+### Findings name what they found
+
+A count is not a fix, so every problem names the thing and — where the exact
+text is known — prints it ready to paste, annotated with the module that needs
+it:
+
+```
+✗ Permissions match installed modules  android.permissions.missing
+    android.permission.CAMERA is required by react-native-vision-camera but is
+    not declared.
+    → Add this to android/app/src/main/AndroidManifest.xml, as children of
+    <manifest> and before <application>:
+      <!-- react-native-vision-camera -->
+      <uses-permission android:name="android.permission.CAMERA" />
+```
+
+Those lines are a `fix` array on the check in `--json`, and `rn-agent fix
+--issue <id>` passes them to the model rather than letting it re-derive syntax
+that is already known exactly.
+
 ### What it checks
 
 **Project** — lockfile sanity, `node_modules` presence, git state, whether
@@ -290,6 +335,92 @@ that could not gather facts costs nothing.
 
 ---
 
+## The interactive terminal
+
+`rn-agent` with no arguments opens a session. It is keyboard-first, it knows your
+project, and every command below is the *same code* the command line runs — slash
+commands re-enter the real CLI in-process rather than reimplementing it.
+
+### Slash commands
+
+| | |
+|---|---|
+| `/help` `/status` `/context` `/clear` `/exit` | the session itself |
+| `/login` `/logout` `/whoami` `/provider` `/model` | accounts and models |
+| `/scan` `/health` `/compatibility` | local, deterministic, no AI |
+| `/review` `/fix` `/feature` `/test` | the AI development commands |
+| `/upgrade` `/migrate` `/docs` `/release` | maintenance and shipping |
+
+Any flag the CLI accepts works here: `/health --deep`, `/fix --issue js.typecheck`,
+`/upgrade --target latest --native`.
+
+### Keys
+
+| Key | What it does |
+|---|---|
+| `Ctrl+K` | command palette, fuzzy search over every command **and its description** — "gradle" finds `/migrate` |
+| `Ctrl+P` | cycle models within the connected provider |
+| `↑` `↓` | navigate a picker; `Enter` selects, `Esc` cancels |
+| `Tab` | complete a slash command |
+| `Ctrl+R` | refresh the model catalogue while the picker is open |
+| `Ctrl+D` | leave |
+
+### Switching model mid-conversation
+
+```
+> the orders list re-renders on every keystroke
+  … answer …
+
+> /model
+╭─ Select Model ───────────────────────────────╮
+│   Anthropic                                  │
+│ ❯ claude-sonnet-4-5  ·current   anthropic    │
+│   claude-opus-4-1               anthropic    │
+│   Other Providers                            │
+│   gpt-5              openai · not connected  │
+╰──────────────────────────────────────────────╯
+  ↑↓ Navigate   Enter Select   Ctrl+R Refresh   Esc Cancel
+
+> continue
+```
+
+Only the model changes. The conversation, the scanned project, the knowledge
+store and your git state are the session's, not the provider's. `/provider` works
+the same way and resets the model to the new provider's default, because a Claude
+model id means nothing to Gemini.
+
+The model list is **discovered from your account** and cached; a provider that is
+not connected is still listed, with the reason. `/model --refresh` re-reads it,
+`/model claude-opus` picks by name (an ambiguous name is refused rather than
+guessed), and `/model --task migration` binds a model to one role.
+
+### Prose
+
+A line that is not a command is either routed or answered:
+
+```
+> fix my android build
+╭─ Run a command? ─────────────────────────────╮
+│ ❯ Run /fix        the real command, same as the CLI
+│   Answer as a question   no files touched
+│   Cancel
+╰──────────────────────────────────────────────╯
+```
+
+Routing is a keyword table, not a model call — paying a model to choose a command
+would add latency and a new way to be wrong. The suggestion is always offered,
+never run silently, because a command may write files. Anything unmatched is
+answered with budgeted, secret-filtered context, and the token cost is printed.
+
+### Non-interactive
+
+A piped or redirected session never blocks: it prints the status and the command
+list and exits zero. `ui.interactive: false` in `.rn-agent/config.yaml` does the
+same permanently.
+
+---
+
+
 ## Setting up AI
 
 AI is **opt-in, per developer, on your own account**. The agent never proxies a
@@ -297,20 +428,87 @@ request through a vendor of its own, ships no shared key, and has no code path
 that talks to a model without one.
 
 ```bash
-rn-agent provider --list          # what is supported, and what you already have
-rn-agent login anthropic          # prompts for the key, verifies it, stores it
-rn-agent whoami                   # provider, model, and where the key came from
+rn-agent login                    # or /login in the terminal: pick a provider
+rn-agent whoami                   # provider, auth method, and where it came from
 ```
 
-### Supported providers
+### What each provider actually supports
 
-| Provider | `login` name | Key from | Environment variable |
-|---|---|---|---|
-| Anthropic Claude | `anthropic` (alias `claude`) | <https://console.anthropic.com/settings/keys> | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` (alias `gpt`) | <https://platform.openai.com/api-keys> | `OPENAI_API_KEY` |
-| Ollama (local) | `ollama` (alias `local`) | no key — runs on your machine | `OLLAMA_HOST` (host, not a key) |
+This is the part most tools are vague about, so rn-agent is not. **OAuth is used
+wherever a provider officially offers it; where it does not, the terminal says so
+instead of dressing a key entry up as a subscription login.**
 
-### Giving it the key
+| Provider | Auth | Why |
+|---|---|---|
+| **Google Gemini** (`google`, alias `gemini`) | **OAuth** — sign in with your Google account | Google [documents an OAuth 2.0 flow](https://ai.google.dev/gemini-api/docs/oauth) for the Gemini API. The tokens authorise **your** Cloud project |
+| **Anthropic** (`anthropic`, alias `claude`) | **API Key** | Anthropic restricts subscription OAuth (Free/Pro/Max) to Claude Code and Claude.ai; a Console key is the only mechanism open to third-party tools, billed separately from a Claude subscription |
+| **OpenAI** (`openai`, alias `gpt`) | **API Key** | "Sign in with ChatGPT" is an *identity* provider — it returns a profile, not model access |
+| **Ollama** (`ollama`, alias `local`) | **None** | runs on your machine |
+| **Claude on Vertex AI** (`vertex`, alias `claude-vertex`) | **OAuth** — sign in with your Google account | Anthropic [publishes Claude on Google Cloud](https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai) and Google authenticates with OAuth: Claude models, **no Anthropic key**, billed to your Cloud project |
+| **Cursor** (`cursor`, alias `cursor-cli`) | **The Cursor CLI's own login** | `cursor-agent login` once and rn-agent uses the CLI — it never reads Cursor's stored credential. `CURSOR_API_KEY` works for CI |
+
+Full sources, and what is deliberately **not** implemented (no cookie extraction,
+no token scraping, no impersonating another CLI, no invented quota figures), are in
+[`docs/authentication.md`](docs/authentication.md).
+
+> A Claude Pro/Max subscription **cannot** pay for this agent's requests. Any tool
+> claiming otherwise is using a mechanism Anthropic has prohibited. `/status`
+> prints this rather than leaving you to wonder why you are pasting a key.
+>
+> Want Claude *without* a key? `rn-agent login vertex` — a Google consent screen,
+> Claude models, your Cloud project's bill. Different product, different invoice,
+> both vendors document it.
+
+### Signing in with an account (Google, and Claude via Vertex)
+
+```bash
+# once, with the client_secret.json Google's quickstart gives you
+rn-agent login google --client-file ~/Downloads/client_secret.json
+# afterwards
+rn-agent login google        # opens the consent screen; tokens go to your keychain
+
+# Claude with no Anthropic key, on the same Google sign-in
+rn-agent login vertex --cloud-project my-project --region us-east5
+rn-agent model claude-sonnet-4-5@20250929
+```
+
+PKCE (S256), a one-shot `127.0.0.1` listener, and a `state` check on the way back.
+No client id is embedded in this CLI on purpose: an OAuth client belongs to
+whoever owns the project being billed. Access tokens refresh automatically.
+
+`google` and `vertex` are one Google account, so they share one stored session:
+sign in once, both are connected; sign out once, both are gone.
+
+**No browser** (container, CI, SSH)? The login switches to the RFC 8628 device
+grant on its own — it prints a code and a URL, you approve on a phone or laptop,
+and it polls until the provider says yes. Force it with `--device`.
+
+### Using Cursor
+
+Cursor keeps its own login, so there is nothing for rn-agent to store:
+
+```bash
+curl https://cursor.com/install -fsS | bash   # once, if you have no CLI
+cursor-agent login                            # Cursor's own browser sign-in
+
+rn-agent login cursor                         # point rn-agent at it
+rn-agent whoami --check                       # confirms via `cursor-agent status`
+rn-agent model --list --remote                # models your Cursor account can use
+```
+
+`rn-agent login cursor` asks for no key — it selects the provider and verifies
+through the CLI. For CI, where there is no browser to sign in with:
+
+```bash
+export CURSOR_API_KEY=...                     # or:
+echo "$CURSOR_API_KEY" | rn-agent login cursor --stdin
+```
+
+A stored key takes precedence over the CLI's session and is reported as the key
+it is. `rn-agent logout cursor` forgets **that key only** — Cursor's own session
+is not rn-agent's to revoke, and `cursor-agent logout` is what ends it.
+
+### Giving it a key
 
 ```bash
 rn-agent login anthropic                      # hidden prompt (interactive terminal)
@@ -391,7 +589,7 @@ never build a provider.
 
 ## Daily development
 
-These four commands use your model. They all follow the same contract: you see
+These commands use your model. They all follow the same contract: you see
 what is proposed, your `rules.yaml` can refuse it, the change is applied through
 the same writer as everything else, and if the project stops building the whole
 change is rolled back.
@@ -446,6 +644,58 @@ Validation
 `rn-agent test` may only write test files. A proposal that touches production
 code is refused, and generated tests that fail are rolled back — a red test
 nobody trusts is worse than no test.
+
+### Handing a task to the Cursor agent
+
+`review`/`fix`/`feature`/`test` treat the model as a brain — it proposes, rn-agent
+applies. **Cursor's agent is a pair of hands**: it has its own tools and edits the
+tree itself. `rn-agent delegate` is the opt-in for that, and it is explicit about
+the trade instead of hiding it.
+
+```bash
+rn-agent delegate "extract the header into a shared component"
+rn-agent delegate "bump minSdk to 24" --allow-native
+rn-agent --dry-run delegate "..."      # shows the task and the deny list; runs nothing
+```
+
+What brackets the run, since these edits never pass through rn-agent's writer:
+
+1. **A clean git tree is required.** That *is* the backup: if HEAD matches the
+   tree beforehand, `git restore .` is an exact undo. `--allow-dirty` opts out and
+   the report then says the undo is no longer exact.
+2. **A branch of its own** (`--no-branch` opts out), so your previous tip never moves.
+3. **Your `rules.yaml` becomes Cursor's own deny list.** rn-agent writes
+   `permissions.deny` into `.cursor/cli.json` *before* starting, so a forbidden
+   write is refused by Cursor rather than merely reported afterwards — lockfiles,
+   keystores, `.env*`, and `android/`, `ios/`, `package.json` unless you pass
+   `--allow-native` / `--allow-deps`. Your own `allow` list is merged, not replaced,
+   and the file is restored afterwards.
+4. **The diff is audited** against those same rules, read back off disk.
+5. **Validation runs** (`typecheck`, `tests` by default). A rule violation or a
+   failed build exits non-zero.
+
+Nothing destructive runs on failure. rn-agent prints the restore command and lets
+you decide — the same rule it follows for every other git operation.
+
+```
+delegate  Cursor · cursor-agent
+      Bumped minSdk in android/build.gradle.
+
+Changed (1)
+    android/build.gradle
+
+Rule violations (1)
+✗ android/build.gradle: native file; re-run with --allow-native to permit it
+
+  → discard the agent's work with `git restore .`
+```
+
+**No SDK dependency.** `cursor-sdk` on PyPI is official, but each wheel bundles a
+~50–60 MB proprietary bridge binary and wraps the same documented CLI and REST
+surface. rn-agent ships an npm wrapper with a private venv, so that is a real cost
+for no capability — the integration uses the documented
+[headless CLI](https://cursor.com/docs/cli/headless) through the same
+`CommandRunner` every other external tool goes through.
 
 ---
 
@@ -560,6 +810,8 @@ ai:
     review: null
   enabled: true
   base_url: null          # self-hosted gateway, or Ollama on another machine
+  project: null           # Google Cloud project that pays for Vertex requests
+  region: global          # Vertex AI location, e.g. us-east5
   max_output_tokens: 4096
   temperature: 0.0
   timeout_seconds: 120.0
@@ -583,6 +835,12 @@ context:
   respect_gitignore: true
   allow_secret_files: false
   max_file_kb: 96
+
+ui:
+  interactive: true      # false: bare `rn-agent` prints status instead of a session
+  colors: true
+  banner: true
+  status_bar: true
 
 logging:
   level: INFO
@@ -656,13 +914,17 @@ FileManager    CommandRunner   SafetyManager  CredentialStore
 ```
 src/rn_agent/
 ├── cli/            Typer app, Rich UI, shared runtime + 3 command groups
+├── tui/            the interactive terminal: picker, session, router, palette,
+│                   dialogs, migration wizard, prose routing
 ├── core/           AgentContext, AgentCommand, registry, config, logging, paths
 ├── commands/       scan, health, review, fix, feature, test, upgrade,
-│                   migrate, compatibility, docs, release
+│                   migrate, compatibility, docs, release, delegate
 ├── agents/         the AI work layer: rules, context budget, prompts, output
-│                   parsing, one call path, apply/rollback workflow
-├── ai/             AIProvider + Anthropic/OpenAI/Ollama, registry
-├── auth/           keychain backends, CredentialStore, login/whoami policy
+│                   parsing, one call path, apply/rollback workflow, and the
+│                   Cursor agent runner (deny list, audit)
+├── ai/             AIProvider + Anthropic/OpenAI/Google/Vertex/Cursor/Ollama
+├── auth/           Authenticator (OAuth / API key / local / tool session),
+│                   keychain backends, PKCE loopback + device grant, stores
 ├── net/            the one HTTP seam (JsonTransport) for every subsystem
 ├── validation/     ProjectValidator: install, pods, tsc, eslint, tests, builds
 ├── upgrade/        npm registry client + deterministic upgrade planner
@@ -795,7 +1057,7 @@ cd rn-agent
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                 # 573 tests
+pytest                 # 762 tests
 ruff check src tests   # lint
 mypy                   # types
 ```
@@ -822,7 +1084,7 @@ pytest tests/test_health.py     # one area
 pytest -k semver                # one topic
 ```
 
-573 tests covering project detection, RN/React/Node version resolution, package
+762 tests covering project detection, RN/React/Node version resolution, package
 manager detection, lockfile disambiguation, architecture inference, Gradle `ext`
 indirection, Podfile/pbxproj/plist parsing, every health rule (fires *and* stays
 silent), health scoring, git safety, file backup/rollback/traversal refusal,
@@ -883,11 +1145,14 @@ provider API key.
 | 4 | `upgrade` with peer/native risk analysis | **done** |
 | 5 | `migrate`: upstream template diffs, local rules, build validation, AI-assisted error fixing, rollback | **done** |
 | 6 | `compatibility`, `docs`, `release` | **done** |
+| 7 | interactive terminal, `Authenticator` abstraction + Google OAuth, model registry, slash commands, palette, migration wizard | **done** |
 
 Per-phase reports, with the decisions and the bugs the tests caught, live in
 [`docs/`](docs/): [phase 1](docs/phase-1.md), [phase 2](docs/phase-2.md),
 [phase 3](docs/phase-3.md), [phase 4](docs/phase-4.md),
-[phase 5](docs/phase-5.md), [phase 6](docs/phase-6.md).
+[phase 5](docs/phase-5.md), [phase 6](docs/phase-6.md),
+[phase 7](docs/phase-7.md), [phase 8](docs/phase-8.md) — plus the sourced
+[authentication policy](docs/authentication.md).
 
 ## License
 

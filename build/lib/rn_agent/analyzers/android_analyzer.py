@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from ..models.health import Category, CheckStatus, HealthCheck, Severity
 from ..utils.semver import coerce
-from .base import Analyzer
+from .base import Analyzer, summarize
 
 PLAY_DOCS = "https://developer.android.com/google/play/requirements/target-sdk"
 AGP_DOCS = "https://developer.android.com/build/releases/gradle-plugin"
@@ -281,14 +281,21 @@ class AndroidAnalyzer(Analyzer):
     def _permissions(self) -> list[HealthCheck]:
         android = self.project.android
         declared = set(android.permissions)
-        missing: list[str] = []
+        #: permission -> the modules that need it. A permission can be required
+        #: by more than one module, and naming all of them is what tells a
+        #: developer whether removing one module removes the requirement.
+        missing: dict[str, list[str]] = {}
+        sources: dict[str, str] = {}
         for dependency in self.project.dependencies:
             requirement = self.knowledge.permission_for(dependency.name)
             if requirement is None or not requirement.required:
                 continue
             for permission in requirement.android_permissions:
-                if permission not in declared:
-                    missing.append(f"{permission} (needed by {dependency.name})")
+                if permission in declared:
+                    continue
+                missing.setdefault(permission, []).append(dependency.name)
+                if requirement.source and permission not in sources:
+                    sources[permission] = requirement.source
         if not missing:
             return [
                 self.ok(
@@ -297,15 +304,47 @@ class AndroidAnalyzer(Analyzer):
                     f"{len(declared)} permission(s) declared",
                 )
             ]
+
+        manifest = android.manifest_path or "android/app/src/main/AndroidManifest.xml"
         return [
             self.warn(
                 "android.permissions.missing",
                 "Permissions match installed modules",
-                f"{len(missing)} permission(s) required by installed modules are not declared.",
+                _missing_detail(missing),
                 severity=Severity.HIGH,
-                recommendation="Add the permissions to android/app/src/main/AndroidManifest.xml.",
-                evidence={
-                    f"missing_{index + 1}": item for index, item in enumerate(sorted(missing)[:6])
-                },
+                recommendation=(
+                    f"Add {'this' if len(missing) == 1 else 'these'} to {manifest}, as "
+                    "children of <manifest> and before <application>:"
+                ),
+                fix=_manifest_lines(missing),
+                evidence={name: f"needed by {', '.join(modules)}" for name, modules in sorted(missing.items())}
+                | {f"docs:{name}": url for name, url in sorted(sources.items())},
+                docs="https://developer.android.com/guide/topics/manifest/uses-permission-element",
             )
         ]
+
+
+def _missing_detail(missing: dict[str, list[str]]) -> str:
+    """Name what is missing and who wants it.
+
+    One permission fits on the line, so it is named there. Several would make a
+    paragraph nobody reads, so the count leads and the paste-ready block below
+    carries the names - each annotated with the module that needs it.
+    """
+    if len(missing) == 1:
+        name, modules = next(iter(missing.items()))
+        return f"{name} is required by {', '.join(modules)} but is not declared."
+    return (
+        f"{len(missing)} permissions required by installed modules are not declared: "
+        + summarize(sorted(missing), limit=4)
+        + "."
+    )
+
+
+def _manifest_lines(missing: dict[str, list[str]]) -> list[str]:
+    """The XML to paste, annotated so the manifest records *why* each is there."""
+    lines: list[str] = []
+    for name in sorted(missing):
+        lines.append(f"<!-- {', '.join(missing[name])} -->")
+        lines.append(f'<uses-permission android:name="{name}" />')
+    return lines
