@@ -286,18 +286,28 @@ class AgentContext:
         probe_tools: bool = False,
         stale_seconds: float = 24 * 60 * 60,
     ) -> tuple[ProjectContext, bool]:
-        """The brain, rescanned when it is missing, stale or unusable.
+        """The brain, rescanned when it is missing, stale, or out of date.
 
         Returns ``(project, refreshed)``. Every command past phase 1 uses this
         rather than raising ``ProjectNotScanned``: a developer should not have to
         remember to re-run ``scan`` before asking a question about their project,
         and a stale answer is worse than a two-second rescan.
+
+        ``stale_seconds`` is a ceiling. If AndroidManifest.xml (or another file
+        the scan reads) is newer than the stored brain, we rescan immediately so
+        a resolved health finding is gone on the next command.
         """
-        from ..project.scanner import ProjectScanner, context_age_seconds, save_context
+        from ..project.scanner import (
+            ProjectScanner,
+            context_age_seconds,
+            context_inputs_newer,
+            save_context,
+        )
 
         age = context_age_seconds(self.paths)
         stale = age is not None and age > stale_seconds
-        if not refresh and not stale and self.has_project_context():
+        outdated = context_inputs_newer(self.paths) if self.paths.context_file.is_file() else False
+        if not refresh and not stale and not outdated and self.has_project_context():
             try:
                 return self.project, False
             except Exception as exc:  # a corrupt context file must not be fatal

@@ -25,6 +25,8 @@ from rn_agent.tui.router import CommandRouter, parse_flags
 from rn_agent.tui.select import Choice, Selector, fuzzy_rank, select
 from rn_agent.tui.session import SessionManager
 from rn_agent.tui.wizard import migrate as run_wizard
+from rn_agent.tui.wizard import upgrade as run_upgrade
+from rn_agent.upgrade.versions import RnTarget
 
 KEY = "sk-ant-test-0123456789abcdef"
 
@@ -350,10 +352,14 @@ def test_login_shows_each_provider_with_its_real_auth_method(project, tmp_path):
     handlers.login(session, [], picker=picker)
 
     shown = {choice.value: choice.hint for choice in picker.seen["choices"]}
+    groups = {choice.value: choice.group for choice in picker.seen["choices"]}
     assert "auth: API Key" in shown["anthropic"]
     assert "auth: OAuth" in shown["google"]
     assert "auth: None (local)" in shown["ollama"]
-    assert picker.seen["title"] == "AI Provider"
+    assert groups["anthropic"] == "Paste a console key"
+    assert groups["google"] == "Sign in with an account"
+    assert groups["cursor"] == "Use a local tool session"
+    assert picker.seen["title"] == "Login"
 
 
 def test_login_to_an_api_key_provider_stores_and_connects(project, tmp_path):
@@ -366,12 +372,46 @@ def test_login_to_an_api_key_provider_stores_and_connects(project, tmp_path):
     assert session.provider_name == "anthropic"
 
 
+def test_login_cursor_session_does_not_ask_for_a_key(project, tmp_path, monkeypatch):
+    """A pipe has no browser: the session path must not spawn `cursor-agent login`."""
+    monkeypatch.setattr(
+        "rn_agent.tools.cursor.run_sign_in",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not spawn login")),
+    )
+    session = build_session(project, tmp_path, connect=None)
+
+    result = handlers.login(session, ["cursor"], picker=picker_for("session"))
+
+    assert result.exit_code == 0
+    assert session.provider_name == "cursor"
+
+
 def test_provider_switch_without_a_credential_warns_but_selects(project, tmp_path):
     session = build_session(project, tmp_path)
 
     result = handlers.provider(session, ["openai"], picker=picker_for(None))
 
     assert session.provider_name == "openai"
+    assert "/login openai" in (result.warning or "")
+
+
+def test_switch_offers_provider_and_model(project, tmp_path):
+    session = build_session(project, tmp_path)
+    picker = picker_for("provider")
+
+    handlers.switch(session, [], picker=picker)
+
+    assert {choice.value for choice in picker.seen["choices"]} >= {"provider", "model"}
+
+
+def test_switch_a_provider_name_keeps_the_conversation(project, tmp_path):
+    session = build_session(project, tmp_path)
+    before = list(session.history)
+
+    result = handlers.switch(session, ["openai"], picker=picker_for(None))
+
+    assert session.provider_name == "openai"
+    assert session.history == before
     assert "/login openai" in (result.warning or "")
 
 
@@ -498,7 +538,7 @@ def test_the_palette_offers_every_command(project, tmp_path):
 
     assert command is not None and command.name == "migrate"
     values = {choice.value for choice in picker.seen["choices"]}
-    assert {"/model", "/provider", "/login", "/health", "/migrate", "/exit"} <= values
+    assert {"/model", "/provider", "/login", "/switch", "/health", "/migrate", "/exit"} <= values
 
 
 def test_a_dialog_falls_back_to_its_stated_default():
@@ -552,6 +592,45 @@ def test_the_wizard_cancels_when_no_version_is_offered(project, tmp_path):
     assert result.message == "cancelled"
 
 
+def test_upgrade_asks_which_react_native_version_to_move_to(project, tmp_path):
+    session = build_session(project, tmp_path)
+    targets = (
+        RnTarget(version="0.86.0", series="0.86", newest_published=True),
+        RnTarget(version="0.82.1", series="0.82"),
+    )
+    picker = picker_for("rn:0.86.0")
+
+    result = run_upgrade(session, ["--offline"], picker=picker, targets=targets)
+
+    assert {choice.value for choice in picker.seen["choices"]} >= {"rn:0.86.0", "deps:minor"}
+    # No tty: Analyze is the default, so this is a dry-run migrate.
+    assert result.exit_code in (0, 1)
+    assert not (project.root / ".rn-agent" / "migration-history.json").exists()
+
+
+def test_upgrade_honours_an_explicit_to(project, tmp_path):
+    session = build_session(project, tmp_path)
+
+    result = run_upgrade(
+        session, ["--to", "0.80.0"], picker=picker_for(None), asker=lambda prompt: None
+    )
+
+    assert result.exit_code == 1
+    assert "not newer" in (result.warning or "")
+
+
+def test_upgrade_can_bump_javascript_dependencies_instead(project, tmp_path):
+    session = build_session(project, tmp_path)
+
+    result = run_upgrade(
+        session,
+        ["--deps", "--offline", "--no-install", "--no-check"],
+        picker=picker_for(None),
+    )
+
+    assert result.exit_code in (0, 1)
+
+
 # ---------------------------------------------------------------------------
 # intent routing
 # ---------------------------------------------------------------------------
@@ -560,6 +639,7 @@ def test_the_wizard_cancels_when_no_version_is_offered(project, tmp_path):
     [
         ("fix my android build", Intent.FIX),
         ("migrate react native to 0.86.0", Intent.MIGRATE),
+        ("upgrade react native to 0.86.0", Intent.UPGRADE),
         ("can I upgrade to 0.86?", Intent.COMPATIBILITY),
         ("what's wrong with my project", Intent.HEALTH),
         ("how does Hermes differ from JSC", Intent.QUESTION),
@@ -574,6 +654,13 @@ def test_a_migration_request_carries_its_target():
 
     assert detection.arguments == ("--to", "0.86.0")
     assert detection.strong is True
+
+
+def test_an_upgrade_request_carries_its_target():
+    detection = detect("upgrade react native to 0.86.0")
+
+    assert detection.intent is Intent.UPGRADE
+    assert detection.arguments == ("--to", "0.86.0")
 
 
 def test_the_model_cache_holds_ids_only(project, tmp_path):

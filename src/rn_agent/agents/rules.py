@@ -14,8 +14,9 @@ is the enforcement.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any
 
 from ..core.paths import AgentPaths
@@ -62,6 +63,29 @@ def is_native_path(path: str) -> bool:
     )
 
 
+def _project_relative_native(path: str) -> str:
+    """Strip to ``android/...`` / ``ios/...`` so absolute ``--file`` paths match."""
+    posix = path.replace("\\", "/").lstrip("./")
+    for marker in ("android/", "ios/"):
+        index = posix.find(marker)
+        if index >= 0:
+            return posix[index:]
+    return posix
+
+
+def native_path_allowed(path: str, patterns: Sequence[str]) -> bool:
+    """Whether ``path`` matches a developer-approved native glob or exact path."""
+    posix = _project_relative_native(path)
+    name = posix.rsplit("/", 1)[-1]
+    for pattern in patterns:
+        pat = _project_relative_native(str(pattern))
+        if not pat:
+            continue
+        if posix == pat or fnmatch(posix, pat) or fnmatch(name, pat):
+            return True
+    return False
+
+
 def is_lockfile(path: str) -> bool:
     return path.replace("\\", "/").rsplit("/", 1)[-1] in LOCKFILE_NAMES
 
@@ -91,6 +115,9 @@ class ProjectRules:
     language: str = "typescript"
     forbid_new_dependencies: bool = True
     forbid_native_edits_without_confirmation: bool = True
+    #: Native paths the developer has already approved in rules.yaml.
+    #: Globs are allowed (``android/**/AndroidManifest.xml``).
+    allow_native_paths: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     #: Keys the developer added that this version does not interpret. They are
     #: still shown to the model - an unknown rule is a rule, not noise.
@@ -106,6 +133,7 @@ class ProjectRules:
         "language",
         "forbid_new_dependencies",
         "forbid_native_edits_without_confirmation",
+        "allow_native_paths",
     )
 
     # -- loading -----------------------------------------------------------
@@ -128,6 +156,7 @@ class ProjectRules:
             forbid_native_edits_without_confirmation=bool(
                 rules.get("forbid_native_edits_without_confirmation", True)
             ),
+            allow_native_paths=_as_tuple(rules.get("allow_native_paths")),
             notes=_as_tuple(payload.get("notes")),
             extra={
                 key: value for key, value in rules.items() if key not in cls.KNOWN_KEYS
@@ -160,8 +189,15 @@ class ProjectRules:
         if self.forbid_native_edits_without_confirmation:
             lines.append(
                 "- Do not edit native files (android/, ios/, *.gradle, *.pbxproj, Podfile) "
-                "unless the request is explicitly about them."
+                "unless the request is explicitly about them, or the path is listed in "
+                "allow_native_paths."
             )
+            if self.allow_native_paths:
+                lines.append(
+                    "- Native paths already approved: "
+                    + ", ".join(self.allow_native_paths)
+                    + "."
+                )
         lines.extend(
             f"- {key.replace('_', ' ')}: {json.dumps(value, default=str)}"
             for key, value in self.extra.items()
@@ -176,8 +212,10 @@ class ProjectRules:
         *,
         allow_dependencies: bool = False,
         allow_native: bool = False,
+        allowed_native_paths: Sequence[str] = (),
     ) -> list[RuleViolation]:
         """Which edits break a rule. An empty list means "all clear"."""
+        permitted_native = tuple(self.allow_native_paths) + tuple(allowed_native_paths)
         found: list[RuleViolation] = []
         for edit in edits:
             path = edit.path.replace("\\", "/")
@@ -194,12 +232,14 @@ class ProjectRules:
                 self.forbid_native_edits_without_confirmation
                 and not allow_native
                 and is_native_path(path)
+                and not native_path_allowed(path, permitted_native)
             ):
                 found.append(
                     RuleViolation(
                         "forbid_native_edits_without_confirmation",
                         path,
-                        "native file; re-run with --allow-native to permit it",
+                        "native file; re-run with --allow-native, or add it to "
+                        "rules.allow_native_paths",
                     )
                 )
             elif self.forbid_new_dependencies and not allow_dependencies and name == "package.json":

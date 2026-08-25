@@ -55,6 +55,7 @@ src/rn_agent/cli/maintain.py
 src/rn_agent/cli/options.py
 src/rn_agent/cli/runtime.py
 src/rn_agent/cli/ui.py
+src/rn_agent/cli/working.py
 src/rn_agent/commands/__init__.py
 src/rn_agent/commands/compatibility.py
 src/rn_agent/commands/delegate.py
@@ -138,10 +139,12 @@ src/rn_agent/tui/router.py
 src/rn_agent/tui/select.py
 src/rn_agent/tui/session.py
 src/rn_agent/tui/theme.py
+src/rn_agent/tui/versions.py
 src/rn_agent/tui/wizard.py
 src/rn_agent/upgrade/__init__.py
 src/rn_agent/upgrade/planner.py
 src/rn_agent/upgrade/registry.py
+src/rn_agent/upgrade/versions.py
 src/rn_agent/utils/__init__.py
 src/rn_agent/utils/io.py
 src/rn_agent/utils/redaction.py
@@ -174,3 +177,4 @@ tests/test_tui.py
 tests/test_upgrade.py
 tests/test_validation.py
 tests/test_vertex.py
+tests/test_working.py

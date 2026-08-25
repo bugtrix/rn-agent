@@ -62,7 +62,7 @@ class UpgradeReadyPlan:
 
 class UpgradeCommand(AgentCommand[UpgradeAnalysis, UpgradeReadyPlan]):
     name = "upgrade"
-    description = "Risk-ranked dependency upgrades, with peer and native analysis"
+    description = "Upgrade React Native to a chosen version, or bump JavaScript dependencies"
     read_only = False
     requires_context = True
 

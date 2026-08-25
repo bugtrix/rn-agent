@@ -18,6 +18,7 @@ from rn_agent.models.upgrade import ChangeKind
 from rn_agent.net.http import HttpResponse
 from rn_agent.upgrade.planner import plan_upgrades
 from rn_agent.upgrade.registry import ABBREVIATED, NpmRegistry
+from rn_agent.upgrade.versions import classify_upgrade, list_rn_targets, resolve_rn_target
 
 
 def packument(name: str, versions: dict[str, dict], latest: str | None = None) -> dict:
@@ -139,8 +140,8 @@ def test_react_native_and_react_are_blocked_and_point_at_migrate(project):
     plan = plan_for(project, {}, policy="latest")
 
     blocked = {item.name: item for item in plan.blocked}
-    assert "migrate" in (blocked["react-native"].blocked_reason or "")
-    assert "migrate" in (blocked["react"].blocked_reason or "")
+    assert "upgrade --to" in (blocked["react-native"].blocked_reason or "")
+    assert "upgrade --to" in (blocked["react"].blocked_reason or "")
     assert blocked["react-native"].risk is RiskLevel.CRITICAL
 
 
@@ -354,3 +355,71 @@ def test_the_report_is_written(project):
     assert payload["policy"] == "minor"
     assert payload["applied"] == ["package.json"]
     assert outcome.summary["report"] == str(path)
+
+
+# ---------------------------------------------------------------------------
+# choosing a React Native version
+# ---------------------------------------------------------------------------
+def test_classify_upgrade_treats_a_version_as_react_native():
+    request = classify_upgrade(to="0.86.0")
+
+    assert request.kind == "rn"
+    assert request.version == "0.86.0"
+
+
+def test_classify_upgrade_treats_a_policy_as_dependencies():
+    request = classify_upgrade(target="minor")
+
+    assert request.kind == "deps"
+    assert request.policy == "minor"
+
+
+def test_classify_upgrade_asks_when_nothing_was_passed():
+    assert classify_upgrade().kind == "ask"
+
+
+def test_classify_upgrade_refuses_to_mix_react_native_and_deps():
+    with pytest.raises(RNAgentError, match="not both"):
+        classify_upgrade(to="0.86.0", deps=True)
+
+
+def test_list_rn_targets_keeps_the_newest_patch_of_each_newer_series():
+    transport = Registry(
+        {
+            "react-native": packument(
+                "react-native",
+                {
+                    "0.81.0": {},
+                    "0.81.4": {},
+                    "0.82.0": {},
+                    "0.82.1": {},
+                    "0.86.0": {},
+                    "0.86.1-rc.0": {},
+                },
+                latest="0.86.0",
+            )
+        }
+    )
+    document = NpmRegistry(transport=transport).packument("react-native")
+
+    targets = list_rn_targets("0.81.0", document)
+
+    assert [item.version for item in targets] == ["0.86.0", "0.82.1", "0.81.4"]
+    assert targets[0].newest_published is True
+    assert targets[-1].current_series is True
+
+
+def test_resolve_rn_target_turns_a_series_into_its_latest_patch():
+    transport = Registry(
+        {
+            "react-native": packument(
+                "react-native",
+                {"0.86.0": {}, "0.86.1": {}, "0.86.2": {}},
+                latest="0.86.2",
+            )
+        }
+    )
+    document = NpmRegistry(transport=transport).packument("react-native")
+
+    assert resolve_rn_target("0.86", document) == "0.86.2"
+    assert resolve_rn_target("0.86.1", document) == "0.86.1"

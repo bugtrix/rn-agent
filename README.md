@@ -177,7 +177,7 @@ rn-agent --version
 | `rn-agent fix` | ✅ Phase 3 | Fix what `health`/`review` reported, then prove the project still builds |
 | `rn-agent feature` | ✅ Phase 3 | Implement a feature following your existing architecture |
 | `rn-agent test` | ✅ Phase 3 | Generate tests for your code and run them |
-| `rn-agent upgrade` | ✅ Phase 4 | Risk-ranked dependency upgrades, with peer and native analysis |
+| `rn-agent upgrade` | ✅ Phase 4 | Pick a React Native version to move to, or bump JS dependencies |
 | `rn-agent migrate` | ✅ Phase 5 | React Native version migration from the upstream template diff |
 | `rn-agent compatibility` | ✅ Phase 6 | Check the project against a React Native version before migrating |
 | `rn-agent docs` | ✅ Phase 6 | Write project documentation from the scanned facts |
@@ -352,7 +352,7 @@ commands re-enter the real CLI in-process rather than reimplementing it.
 | `/upgrade` `/migrate` `/docs` `/release` | maintenance and shipping |
 
 Any flag the CLI accepts works here: `/health --deep`, `/fix --issue js.typecheck`,
-`/upgrade --target latest --native`.
+`/upgrade --to 0.86.0`, `/upgrade --deps --target latest --native`.
 
 ### Keys
 
@@ -445,7 +445,7 @@ instead of dressing a key entry up as a subscription login.**
 | **OpenAI** (`openai`, alias `gpt`) | **API Key** | "Sign in with ChatGPT" is an *identity* provider — it returns a profile, not model access |
 | **Ollama** (`ollama`, alias `local`) | **None** | runs on your machine |
 | **Claude on Vertex AI** (`vertex`, alias `claude-vertex`) | **OAuth** — sign in with your Google account | Anthropic [publishes Claude on Google Cloud](https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai) and Google authenticates with OAuth: Claude models, **no Anthropic key**, billed to your Cloud project |
-| **Cursor** (`cursor`, alias `cursor-cli`) | **The Cursor CLI's own login** | `cursor-agent login` once and rn-agent uses the CLI — it never reads Cursor's stored credential. `CURSOR_API_KEY` works for CI |
+| **Cursor** (`cursor`, alias `cursor-cli`) | **The Cursor CLI's own login** | `rn-agent login cursor` runs `cursor-agent login` and opens Cursor's sign-in page — it never reads Cursor's stored credential. `CURSOR_API_KEY` works for CI |
 
 Full sources, and what is deliberately **not** implemented (no cookie extraction,
 no token scraping, no impersonating another CLI, no invented quota figures), are in
@@ -485,19 +485,20 @@ and it polls until the provider says yes. Force it with `--device`.
 
 ### Using Cursor
 
-Cursor keeps its own login, so there is nothing for rn-agent to store:
+Cursor keeps its own login, so there is nothing for rn-agent to store.
+`rn-agent login cursor` runs `cursor-agent login`, which opens Cursor's own
+sign-in page in your browser. When that page says "All set", return to the
+terminal — rn-agent never copies the session.
 
 ```bash
-curl https://cursor.com/install -fsS | bash   # once, if you have no CLI
-cursor-agent login                            # Cursor's own browser sign-in
-
-rn-agent login cursor                         # point rn-agent at it
+rn-agent login cursor                         # opens Cursor's sign-in page
 rn-agent whoami --check                       # confirms via `cursor-agent status`
 rn-agent model --list --remote                # models your Cursor account can use
 ```
 
-`rn-agent login cursor` asks for no key — it selects the provider and verifies
-through the CLI. For CI, where there is no browser to sign in with:
+If the Cursor CLI is not installed yet, login offers to download it (~75 MB)
+into rn-agent's own directory rather than piping Cursor's installer into a
+shell. For CI, where there is no browser to sign in with:
 
 ```bash
 export CURSOR_API_KEY=...                     # or:
@@ -614,7 +615,8 @@ rn-agent test src/screens/OrdersScreen.tsx
    list is printed with `--verbose`.
 2. The reply must be complete file contents. No diffs, no `// ...unchanged`.
 3. `rules.yaml` is enforced *before* writing: `package.json`, lockfiles and
-   native files are refused unless you pass `--allow-deps` / `--allow-native`.
+   native files are refused unless you pass `--allow-deps` / `--allow-native`,
+   name the native file with `--file`, or list it in `allow_native_paths`.
 4. Non-low-risk changes ask for confirmation (or `-y`), and the previous bytes
    are backed up.
 5. `tsc` and your test script run afterwards. If they fail, every file is
@@ -685,7 +687,7 @@ Changed (1)
     android/build.gradle
 
 Rule violations (1)
-✗ android/build.gradle: native file; re-run with --allow-native to permit it
+✗ android/build.gradle: native file; re-run with --allow-native, or add it to rules.allow_native_paths
 
   → discard the agent's work with `git restore .`
 ```
@@ -721,19 +723,27 @@ there is a conflict.
 
 ### rn-agent upgrade
 
-Deterministic: no model is involved in the decision.
+Asks which React Native version to move to. The work itself is the same
+`migrate` engine (branch, template diff, validate, roll back). JavaScript
+dependency bumps are still available behind `--deps`.
 
 ```bash
-rn-agent upgrade                       # minor upgrades, the default
-rn-agent upgrade --target patch
-rn-agent upgrade --target latest --only lodash --only axios
-rn-agent upgrade --native              # include packages with native code
-rn-agent upgrade --offline             # report drift without contacting npm
+rn-agent upgrade                       # pick a published React Native version
+rn-agent upgrade --to 0.86.0           # or pass it
+rn-agent upgrade 0.86                  # a series: newest published 0.86.x
+rn-agent upgrade --deps                # JS packages, minor by default
+rn-agent upgrade --deps --target patch
+rn-agent upgrade --deps --target latest --only lodash --only axios
+rn-agent upgrade --deps --native       # include packages with native code
+rn-agent upgrade --deps --offline      # report drift without contacting npm
 ```
 
-* `react-native` and `react` are always blocked, pointing at `rn-agent migrate`
-  — a React Native bump is a migration, not a range rewrite.
-* A peer conflict blocks the candidate and is listed. An *undecidable* range
+* In a terminal with no flags, you get a searchable list of published React
+  Native versions newer than the one you are on. Piped or CI runs keep the old
+  JavaScript-dependency default so scripts do not hang.
+* `react-native` and `react` are never bumped as ordinary packages - that is
+  a version move, so it goes through this picker (or `rn-agent migrate`).
+* A peer conflict blocks a JS candidate and is listed. An *undecidable* range
   (`workspace:*`, a git URL) is a note, never an invented conflict.
 * Native packages need a pod install and a rebuild, so they rank higher and are
   excluded unless you ask.
@@ -886,6 +896,9 @@ rules:
   allowed_navigation: [react-navigation]
   forbid_new_dependencies: true
   forbid_native_edits_without_confirmation: true
+  # Persist confirmation for specific native files (globs ok). Blank until you add some.
+  allow_native_paths:
+    - android/app/src/main/AndroidManifest.xml
 ```
 
 `health` reuses the context written by `scan` (it refreshes automatically when
@@ -1020,7 +1033,8 @@ why there is one writer.
   classed as low risk, so they can never be auto-applied.
 * Model-proposed edits are screened against your `rules.yaml` **before** the
   safety gate: lockfiles are always refused, and `package.json` and native files
-  need an explicit `--allow-deps` / `--allow-native`.
+  need an explicit `--allow-deps` / `--allow-native`, a `--file` on that native
+  path, or an entry in `rules.allow_native_paths`.
 * Every write-command validates afterwards and rolls the whole change back when
   the project stops building (`--keep` opts out).
 * `migrate` works on a branch, refuses a dirty tree, applies diff hunks only
@@ -1130,7 +1144,7 @@ provider API key.
 | `npm registry unreachable` (exit 11) | `upgrade`/`compatibility` need the registry for target versions; retry, or use `--offline` for drift only |
 | `no published diff for X -> Y` | `migrate` could not find that upstream version pair; check both versions exist, or pin the steps in `migration-rules/` |
 | A migration step says `conflict` | Your file drifted from the template; the hunk is printed — apply it by hand, then re-run |
-| `every proposed change was refused by your rules` | Your `rules.yaml` forbids it; use `--allow-deps` / `--allow-native`, or edit the rules |
+| `every proposed change was refused by your rules` | Your `rules.yaml` forbids it; use `--allow-deps` / `--allow-native`, `--file` on a native path, or add it to `allow_native_paths` |
 | `release blocked` | Commit or stash first, or `--force`; the blockers are listed with their reasons |
 
 ---

@@ -8,12 +8,11 @@ automation contract (``-p --output-format json``).
 
 Two deliberate choices, both about staying inside rn-agent's safety envelope:
 
-* **``--mode ask``, and never ``--force``.** Print mode has access to write and
-  shell tools, and ``--force`` is what auto-approves them. Ask mode plus no
-  ``--force`` means the agent answers instead of editing, so the proposal still
-  comes back as text and rn-agent applies it through ``FileManager`` with
-  backups, rules and rollback - the same path every other provider takes.
-  ``rn-agent delegate`` is the opt-in command for letting Cursor edit directly.
+* **``--mode ask``, ``--trust``, and never ``--force``.** Print mode has access
+  to write and shell tools, and ``--force`` / ``--yolo`` auto-approve them. Ask
+  mode plus no ``--force`` means the agent answers instead of editing.
+  ``--trust`` only skips Cursor's workspace-trust prompt, which a headless CLI
+  cannot answer. ``rn-agent delegate`` is the opt-in for letting Cursor edit.
 * **No SDK dependency.** ``cursor-sdk`` on PyPI is official but ships a bundled
   bridge binary (~50-60 MB per wheel, proprietary, public beta) and wraps the
   same documented CLI and REST surface. rn-agent ships an npm wrapper with a
@@ -34,17 +33,17 @@ from typing import Any, ClassVar
 from ..errors import ProviderError
 from ..net.http import DEFAULT_TIMEOUT, HttpResponse
 from ..runner.command_runner import CommandRunner
+from ..tools.cursor import MISSING_HINT, resolve_binary
 from .provider import AIProvider, ProviderIdentity
 from .types import Completion, Message, Usage
-
-#: The binary, under both names it has shipped as. ``cursor-agent`` is what the
-#: installer puts on PATH; ``agent`` is what the docs call it.
-EXECUTABLES: tuple[str, ...] = ("cursor-agent", "agent")
 
 #: Long prompts go on argv, and argv has a kernel limit (``ARG_MAX``). Refusing
 #: with a number is better than an ``E2BIG`` nobody can read: rn-agent's own
 #: context budget is the thing to turn down.
 MAX_PROMPT_CHARS = 120_000
+#: Shared ``ai.timeout_seconds`` is sized for one HTTP call. Cursor is a local
+#: agent and routinely needs several minutes.
+AGENT_TIMEOUT = 600.0
 
 DOCS = "https://cursor.com/docs/cli/headless"
 KEYS_URL = "https://cursor.com/dashboard?tab=integrations"
@@ -63,12 +62,9 @@ class CursorProvider(AIProvider):
     #: Cursor already has an account default, and `--list-models` is the real
     #: catalogue, so an unset model means "let Cursor choose" - not an error.
     requires_model: ClassVar[bool] = False
-    suggested_models: ClassVar[tuple[str, ...]] = ()
+    suggested_models: ClassVar[tuple[str, ...]] = ("composer-2.5",)
     docs_url: ClassVar[str] = DOCS
-    unreachable_hint: ClassVar[str | None] = (
-        "Install the Cursor CLI with `curl https://cursor.com/install -fsS | bash`, "
-        "then run `cursor-agent login`."
-    )
+    unreachable_hint: ClassVar[str | None] = MISSING_HINT
 
     def __init__(
         self,
@@ -76,6 +72,7 @@ class CursorProvider(AIProvider):
         runner: CommandRunner | None = None,
         mode: str = "ask",
         workspace: str | None = None,
+        binary: str | None = None,
         **extra: Any,
     ) -> None:
         # The base wants a transport it will never use; a local binary has no
@@ -83,8 +80,11 @@ class CursorProvider(AIProvider):
         extra.pop("transport", None)
         extra.pop("base_url", None)
         super().__init__(transport=_NoTransport(), **extra)
+        if self.timeout < AGENT_TIMEOUT:
+            self.timeout = AGENT_TIMEOUT
         self.mode = mode
         self.workspace = workspace
+        self._binary = Path(binary).expanduser() if binary else None
         # The agent reads the repository it is standing in, so the workspace is
         # the working directory rather than an argument on every call.
         self._runner = runner or CommandRunner(
@@ -93,10 +93,12 @@ class CursorProvider(AIProvider):
 
     # -- discovery ---------------------------------------------------------
     def executable(self) -> str:
-        """The CLI name present on this machine."""
-        for candidate in EXECUTABLES:
-            if self._runner.which(candidate):
-                return candidate
+        """The CLI to run: PATH, ``~/.local/bin``, or rn-agent's managed copy."""
+        if self._binary is not None and self._binary.is_file():
+            return str(self._binary)
+        found = resolve_binary(runner=self._runner)
+        if found is not None:
+            return str(found)
         raise ProviderError(
             "the Cursor CLI is not installed",
             hint=self.unreachable_hint,
@@ -179,7 +181,7 @@ class CursorProvider(AIProvider):
         _ = method, path
         prompt = str((payload or {}).get("prompt") or "")
         model = str((payload or {}).get("model") or "")
-        argv = [self.executable(), "--print", "--output-format", "json"]
+        argv = [self.executable(), "--print", "--output-format", "json", "--trust"]
         if self.mode:
             argv += ["--mode", self.mode]
         if model:
@@ -201,7 +203,10 @@ class CursorProvider(AIProvider):
         if result.timed_out:
             raise ProviderError(
                 f"the Cursor CLI did not finish within {self.timeout:.0f}s",
-                hint="Raise ai.timeout_seconds; an agent run is slower than one API call.",
+                hint=(
+                    "Cursor is a local agent, not a single API call. "
+                    "Set ai.timeout_seconds to 600 or more in .rn-agent/config.yaml."
+                ),
             )
         response = _as_response(result.returncode, result.stdout, result.stderr)
         # The base `_request` maps a bad status onto an actionable error; keeping
@@ -211,11 +216,29 @@ class CursorProvider(AIProvider):
             raise self._failure(response)
         return response
 
+    def _failure(self, response: HttpResponse) -> ProviderError:
+        """Keep workspace-trust distinct from a real Cursor outage."""
+        detail = (self._error_message(response) or "").casefold()
+        text = (response.text or "").casefold()
+        if "trust" in detail or "trust" in text:
+            return ProviderError(
+                "the Cursor CLI needs workspace trust for this project",
+                hint=(
+                    "Headless runs pass --trust so this prompt is skipped. "
+                    "Retry with this build. --yolo / --force are not used here; "
+                    "they auto-approve writes."
+                ),
+            )
+        return super()._failure(response)
+
     def _env(self) -> dict[str, str]:
         """Pass the key through the environment, never on the command line."""
-        if not self._credential:
-            return {}
-        return {"CURSOR_API_KEY": self._credential}
+        from ..tools.cursor import search_path
+
+        env = {"PATH": search_path()}
+        if self._credential:
+            env["CURSOR_API_KEY"] = self._credential
+        return env
 
     # -- catalogue ---------------------------------------------------------
     def list_models(self) -> tuple[str, ...]:
@@ -365,3 +388,18 @@ def _model_names(stdout: str) -> tuple[str, ...]:
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith(("Available", "Models"))
     )
+
+
+def preferred_model(models: Sequence[str]) -> str | None:
+    """Pick a Cursor model id to persist after login.
+
+    Composer is Cursor's own default family; anything else is first in the
+    account catalogue. ``None`` when the CLI reported no models.
+    """
+    names = [name for name in models if name]
+    if not names:
+        return None
+    for name in names:
+        if "composer" in name.casefold():
+            return name
+    return names[0]

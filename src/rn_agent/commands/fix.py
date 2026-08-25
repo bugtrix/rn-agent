@@ -166,6 +166,7 @@ class FixCommand(AgentCommand[FixAnalysis, FixPlan]):
             task="fix",
             allow_dependencies=self.allow_dependencies,
             allow_native=self.allow_native,
+            allowed_native_paths=self.files,
             keep_on_failure=self.keep_on_failure,
         )
         kept, refused = workflow.screen(analysis.proposals.proposals)

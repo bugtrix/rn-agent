@@ -63,9 +63,10 @@ VERTEX_DOCS = (
 )
 
 CURSOR_DETAIL = (
-    "The Cursor CLI keeps its own login: run `cursor-agent login` once and this "
-    "agent uses it, without copying the credential. CURSOR_API_KEY is accepted "
-    "instead, for CI."
+    "The Cursor CLI keeps its own login: `rn-agent login cursor` runs "
+    "`cursor-agent login` and opens Cursor's sign-in page. This agent uses that "
+    "session without copying the credential. CURSOR_API_KEY is accepted instead, "
+    "for CI."
 )
 
 CURSOR_DOCS = "https://cursor.com/docs/cli/reference/authentication"

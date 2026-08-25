@@ -18,7 +18,7 @@ from rn_agent.agents.context_builder import ContextBuilder, estimate_tokens
 from rn_agent.agents.engine import AIEngine
 from rn_agent.agents.output import extract_json, parse_changelog, parse_proposals, parse_review
 from rn_agent.agents.prompts import fix_messages, project_brief, review_messages
-from rn_agent.agents.rules import ProjectRules, dependency_delta, is_native_path
+from rn_agent.agents.rules import ProjectRules, dependency_delta, is_native_path, native_path_allowed
 from rn_agent.errors import ConfirmationDeclined, ModelOutputError
 from rn_agent.models.changes import RiskLevel
 from rn_agent.models.health import Severity
@@ -44,6 +44,7 @@ def test_rules_default_when_no_file(project):
 
     assert rules.forbid_new_dependencies is True
     assert rules.forbid_native_edits_without_confirmation is True
+    assert rules.allow_native_paths == ()
     assert "package.json" in "\n".join(rules.as_prompt_lines())
 
 
@@ -112,6 +113,63 @@ def test_rules_can_be_relaxed_per_run():
     violations = rules.violations(edits, allow_native=True, allow_dependencies=True)
 
     assert violations == []
+
+
+def test_allow_native_paths_whitelists_only_what_it_names():
+    rules = ProjectRules(
+        allow_native_paths=("android/app/src/main/AndroidManifest.xml", "android/**/*.kt")
+    )
+    edits = [
+        FileEdit(path="android/app/src/main/AndroidManifest.xml", content="<manifest />"),
+        FileEdit(path="android/app/src/main/java/MainActivity.kt", content="class MainActivity"),
+        FileEdit(path="android/gradle.properties", content="x"),
+        FileEdit(path="ios/Podfile", content="x"),
+    ]
+
+    violations = rules.violations(edits)
+
+    assert {item.path for item in violations} == {
+        "android/gradle.properties",
+        "ios/Podfile",
+    }
+
+
+def test_file_flag_paths_count_as_native_confirmation():
+    rules = ProjectRules()
+    manifest = "android/app/src/main/AndroidManifest.xml"
+
+    assert rules.violations([FileEdit(path=manifest, content="x")])
+    assert not rules.violations(
+        [FileEdit(path=manifest, content="x")],
+        allowed_native_paths=(manifest,),
+    )
+    # An absolute --file path still matches the relative edit.
+    assert not rules.violations(
+        [FileEdit(path=manifest, content="x")],
+        allowed_native_paths=("/tmp/app/" + manifest,),
+    )
+    # Other native files stay refused.
+    assert rules.violations(
+        [FileEdit(path="android/gradle.properties", content="x")],
+        allowed_native_paths=(manifest,),
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "pattern"),
+    [
+        ("android/app/src/main/AndroidManifest.xml", "android/app/src/main/AndroidManifest.xml"),
+        ("android/app/src/main/AndroidManifest.xml", "android/**/AndroidManifest.xml"),
+        ("android/gradle.properties", "android/**"),
+        ("ios/Podfile", "Podfile"),
+        (
+            "android/app/src/main/AndroidManifest.xml",
+            "/Users/me/app/android/app/src/main/AndroidManifest.xml",
+        ),
+    ],
+)
+def test_native_path_allowed_matches(path, pattern):
+    assert native_path_allowed(path, (pattern,)) is True
 
 
 def test_dependency_delta_names_the_packages():
@@ -491,6 +549,26 @@ def test_applier_allows_native_edits_when_asked(project):
 
     assert outcome.applied == ("android/gradle.properties",)
     assert outcome.risk is RiskLevel.HIGH
+
+
+def test_applier_allows_whitelisted_native_paths(project):
+    context = scanned(project, assume_yes=True)
+    manifest = "android/app/src/main/AndroidManifest.xml"
+    applier = EditApplier(
+        context,
+        rules=ProjectRules(allow_native_paths=(manifest,)),
+    )
+
+    outcome = applier.apply(
+        [
+            FileEdit(path=manifest, content="<manifest />\n"),
+            FileEdit(path="android/gradle.properties", content="nope\n"),
+        ],
+        reason="fix",
+    )
+
+    assert outcome.applied == (manifest,)
+    assert {item.path for item in outcome.refused} == {"android/gradle.properties"}
 
 
 def test_applier_stops_when_the_developer_declines(project):

@@ -141,6 +141,33 @@ def test_upgrade_rejects_an_unknown_target(project):
     assert "sideways" in result.output
 
 
+def test_upgrade_to_an_older_react_native_version_is_refused(project):
+    result = invoke(
+        "--path", str(project.root), "upgrade", "--to", "0.80.0", "--offline", "--no-install"
+    )
+
+    assert result.exit_code == 1
+    assert "already on" in result.output
+
+
+def test_upgrade_deps_offline_still_reports_javascript_drift(project):
+    before = (project.root / "package.json").read_text()
+
+    result = invoke(
+        "--path",
+        str(project.root),
+        "upgrade",
+        "--deps",
+        "--offline",
+        "--no-install",
+        "--no-check",
+    )
+
+    assert result.exit_code in (0, 1), result.output
+    assert (project.root / "package.json").read_text() == before
+    assert "Upgrade" in result.output
+
+
 def test_release_reports_blockers_and_writes_nothing(project):
     result = invoke("--path", str(project.root), "release", "--no-changelog")
 

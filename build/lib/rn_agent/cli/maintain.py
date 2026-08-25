@@ -14,17 +14,34 @@ import typer
 
 from ..models.migration import StepKind
 from ..upgrade.planner import POLICIES
+from ..upgrade.versions import UpgradeRequest
 from ..validation.runner import STEP_NAMES
+from . import ui
 from .runtime import as_tuple, build_context, execute, resolve_checks
 
 CHECK_HELP = f"Validation step to run afterwards (repeatable): {', '.join(STEP_NAMES)}."
 
 
 def upgrade(
+    version: Annotated[
+        str | None,
+        typer.Argument(help="React Native version to move to, e.g. 0.86.0 or 0.86."),
+    ] = None,
+    to: Annotated[
+        str | None,
+        typer.Option("--to", help="React Native version to move to."),
+    ] = None,
     target: Annotated[
-        str,
-        typer.Option("--target", help=f"How far to move: {', '.join(POLICIES)}."),
-    ] = "minor",
+        str | None,
+        typer.Option(
+            "--target",
+            help=f"A React Native version, or a JS policy ({', '.join(POLICIES)}).",
+        ),
+    ] = None,
+    deps: Annotated[
+        bool,
+        typer.Option("--deps", help="Upgrade JavaScript dependencies instead of React Native."),
+    ] = False,
     only: Annotated[
         list[str] | None, typer.Option("--only", help="Upgrade just this package (repeatable).")
     ] = None,
@@ -44,26 +61,111 @@ def upgrade(
     ] = False,
     offline: Annotated[
         bool,
-        typer.Option("--offline", help="Do not contact the registry; report drift only."),
+        typer.Option(
+            "--offline",
+            help="Do not contact the registry (RN: cached diffs; JS: drift only).",
+        ),
     ] = False,
 ) -> None:
-    """Risk-ranked dependency upgrades, with peer and native analysis."""
-    from ..commands.upgrade import UpgradeCommand
+    """Upgrade React Native to a chosen version, or bump JavaScript dependencies.
 
-    context = build_context("upgrade")
-    execute(
-        UpgradeCommand(
-            context,
-            policy=target,
+    With no flags, an interactive terminal asks which published React Native
+    version to move to. Pass --deps (or --target patch|minor|latest) to bump
+    packages instead. Scripts without a tty keep the old dependency-upgrade
+    default.
+    """
+    from ..commands.migrate import MigrateCommand
+    from ..commands.upgrade import UpgradeCommand
+    from ..errors import RNAgentError
+    from ..upgrade.versions import classify_upgrade, concrete_rn_version
+
+    if version in POLICIES and target is None and to is None:
+        target, version = version, None
+
+    try:
+        request = classify_upgrade(
+            to=to or version,
+            target=target,
+            deps=deps,
             only=as_tuple(only),
             skip=as_tuple(skip),
-            include_native=native,
-            install=not no_install,
-            checks=resolve_checks(check, disabled=no_check, default=("typecheck", "tests")),
-            offline=offline,
-            verbose=context.verbose,
+            native=native,
         )
-    )
+    except RNAgentError as error:
+        ui.error_panel(error.message, error.hint)
+        raise typer.Exit(error.exit_code) from error
+
+    context = build_context("upgrade")
+    try:
+        if request.kind == "ask":
+            request = _resolve_ask(context, offline=offline)
+    except RNAgentError as error:
+        ui.error_panel(error.message, error.hint)
+        raise typer.Exit(error.exit_code) from error
+    if request.kind == "rn":
+        if request.version:
+            try:
+                request = UpgradeRequest(
+                    kind="rn", version=concrete_rn_version(request.version, offline=offline)
+                )
+            except RNAgentError as error:
+                ui.error_panel(error.message, error.hint)
+                raise typer.Exit(error.exit_code) from error
+        execute(
+            MigrateCommand(
+                context,
+                to_version=request.version,
+                install=not no_install,
+                offline=offline,
+                verbose=context.verbose,
+            )
+        )
+    else:
+        execute(
+            UpgradeCommand(
+                context,
+                policy=request.policy,
+                only=as_tuple(only),
+                skip=as_tuple(skip),
+                include_native=native,
+                install=not no_install,
+                checks=resolve_checks(check, disabled=no_check, default=("typecheck", "tests")),
+                offline=offline,
+                verbose=context.verbose,
+            )
+        )
+
+
+def _resolve_ask(context: object, *, offline: bool) -> UpgradeRequest:
+    """Interactive: pick an RN version. Piped/CI: keep the JS-deps default."""
+    from ..tui.theme import interactive_terminal
+    from .options import OPTIONS
+
+    if OPTIONS.json_output or not interactive_terminal():
+        return UpgradeRequest(kind="deps", policy="minor")
+    chosen = _prompt_rn_version(context, offline=offline)
+    if not chosen:
+        ui.note("cancelled")
+        raise typer.Exit(0)
+    return UpgradeRequest(kind="rn", version=chosen)
+
+
+def _prompt_rn_version(context: object, *, offline: bool) -> str | None:
+    from ..commands.health import CONTEXT_STALE_SECONDS
+    from ..core.context import AgentContext
+    from ..errors import RNAgentError
+    from ..tui.versions import pick_rn_version
+    from ..tui.wizard import ask_version
+
+    assert isinstance(context, AgentContext)
+    project, _ = context.ensure_project(stale_seconds=CONTEXT_STALE_SECONDS)
+    current = project.rn_version
+    if not current:
+        raise RNAgentError(
+            "the project's React Native version could not be established",
+            hint="Run your package manager's install, then `rn-agent scan`.",
+        )
+    return pick_rn_version(current, offline=offline, asker=ask_version)
 
 
 def migrate(

@@ -22,6 +22,7 @@ from rn_agent.auth.methods import (
     ApiKeyAuthenticator,
     LocalAuthenticator,
     OAuthAuthenticator,
+    ToolAuthenticator,
     google_client,
 )
 from rn_agent.auth.oauth import (
@@ -643,3 +644,82 @@ def test_vertex_declares_the_google_session_it_shares():
     # No Vertex-specific key exists, so none may be advertised.
     assert entry.allows_api_key is False
     assert entry.env_var is None
+
+
+# ---------------------------------------------------------------------------
+# a tool that holds its own session
+# ---------------------------------------------------------------------------
+def test_tool_login_opens_the_cli_sign_in_page():
+    """Interactive login runs the tool's own command - we do not host the page."""
+    calls: list[dict] = []
+    authenticator = ToolAuthenticator(
+        provider="cursor",
+        tool="Cursor CLI",
+        sign_in_command="cursor-agent login",
+        launcher=lambda **kwargs: calls.append(kwargs),
+    )
+
+    outcome = authenticator.login(skip_launch=False)
+
+    assert calls == [{"install": False}]
+    assert outcome.stored is False
+    assert outcome.warnings == ()
+    assert outcome.state.connected is True
+
+
+def test_tool_login_skips_the_browser_when_asked():
+    calls: list[dict] = []
+    authenticator = ToolAuthenticator(
+        provider="cursor",
+        tool="Cursor CLI",
+        sign_in_command="cursor-agent login",
+        launcher=lambda **kwargs: calls.append(kwargs),
+    )
+
+    outcome = authenticator.login(skip_launch=True)
+
+    assert calls == []
+    assert "cursor-agent login" in outcome.warnings[0]
+
+
+def test_tool_login_dry_run_does_not_open_a_browser():
+    calls: list[dict] = []
+    authenticator = ToolAuthenticator(
+        provider="cursor",
+        tool="Cursor CLI",
+        sign_in_command="cursor-agent login",
+        launcher=lambda **kwargs: calls.append(kwargs),
+    )
+
+    outcome = authenticator.login(dry_run=True, skip_launch=False)
+
+    assert calls == []
+    assert "dry run" in outcome.warnings[0]
+
+
+def test_tool_login_installs_the_cli_when_asked():
+    calls: list[dict] = []
+    authenticator = ToolAuthenticator(
+        provider="cursor",
+        tool="Cursor CLI",
+        sign_in_command="cursor-agent login",
+        launcher=lambda **kwargs: calls.append(kwargs),
+    )
+
+    authenticator.login(skip_launch=False, install_cli=True)
+
+    assert calls == [{"install": True}]
+
+
+def test_tool_login_returns_the_binary_it_just_ran(tmp_path):
+    binary = tmp_path / "cursor-agent"
+    authenticator = ToolAuthenticator(
+        provider="cursor",
+        tool="Cursor CLI",
+        sign_in_command="cursor-agent login",
+        launcher=lambda **kwargs: binary,
+    )
+
+    outcome = authenticator.login(skip_launch=False)
+
+    assert outcome.binary == str(binary)

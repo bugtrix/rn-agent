@@ -151,7 +151,8 @@ class DelegateCommand(AgentCommand[DelegateAnalysis, DelegatePlan]):
         runner = self._runner(ProjectRules.load(agent.paths))
         plan.permissions_file, plan.previous_permissions = runner.write_permissions()
         try:
-            summary, duration = runner.run(plan.task)
+            with ui.working():
+                summary, duration = runner.run(plan.task)
         finally:
             # The deny list is ours, not the developer's configuration.
             runner.restore_permissions(plan.permissions_file, plan.previous_permissions)

@@ -113,10 +113,14 @@ class Terminal:
         return prompt.prompt(FormattedText([("class:prompt.arrow", "\n> ")]))
 
     def _handle(self, text: str) -> RouteResult:
-        if self.router.is_command(text):
-            result = self.router.dispatch(text)
-        else:
-            result = self._ask(text)
+        try:
+            if self.router.is_command(text):
+                result = self.router.dispatch(text)
+            else:
+                result = self._ask(text)
+        except KeyboardInterrupt:
+            ui.note("cancelled")
+            return RouteResult(warning="cancelled")
         if result.message:
             ui.note(result.message)
         if result.warning:

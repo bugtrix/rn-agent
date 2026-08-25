@@ -23,9 +23,19 @@ from ..auth.authenticator import AuthMethod
 from ..cli import ui
 from ..errors import ProviderError, RNAgentError
 from . import chrome
+from .dialogs import Action, choose
 from .router import RouteResult, SlashCommand, parse_flags
 from .select import Choice, select
 from .session import SessionManager
+
+#: How the login picker is grouped. The method is what the provider actually
+#: offers a third-party tool - not what a subscription product's own app offers.
+AUTH_GROUP: dict[AuthMethod, str] = {
+    AuthMethod.OAUTH: "Sign in with an account",
+    AuthMethod.API_KEY: "Paste a console key",
+    AuthMethod.TOOL: "Use a local tool session",
+    AuthMethod.NONE: "Local, no login",
+}
 
 if TYPE_CHECKING:
     from ..auth.manager import ProviderAuth
@@ -56,20 +66,44 @@ def login(session: SessionManager, args: list[str], *, picker: Picker = select) 
         ui.console().print(f"  [warn]Note[/warn] [muted]{capability.unsupported_note}[/muted]")
 
     secret: str | None = None
-    if capability.method is AuthMethod.API_KEY or (
-        capability.method is AuthMethod.OAUTH and options.get("api-key")
+    wants_key = bool(options.get("api-key") or options.get("stdin"))
+    skip_launch = True
+    install_cli = False
+    dry_run = bool(options.get("dry-run")) or session.dry_run
+    if capability.method is AuthMethod.TOOL and not wants_key:
+        secret, cancelled = _cursor_secret(entry, options, picker)
+        if cancelled:
+            return RouteResult(message="cancelled")
+        from .theme import interactive_terminal
+
+        skip_launch = dry_run or not interactive_terminal()
+        if secret is None and not skip_launch:
+            from ..tools.cursor import offer_install
+
+            install_cli = offer_install(
+                assume_yes=session.assume_yes,
+                confirm=lambda question: ui.confirm(question, default=True),
+            )
+            ui.bullet("Opening Cursor's sign-in page in your browser…")
+            ui.note('Sign in, then return here when the page says "All set".')
+    elif capability.method is AuthMethod.API_KEY or (
+        capability.method is AuthMethod.OAUTH and wants_key
     ):
         secret = _read_key(entry, options)
         if secret is None:
             return RouteResult(exit_code=1, warning="no key given; nothing was stored")
     elif capability.method is AuthMethod.OAUTH:
         ui.bullet(f"Opening {entry.label} authentication in your browser…")
+    elif capability.method is AuthMethod.NONE:
+        ui.note("no credential to store - this runtime is already on the machine")
 
     outcome = authenticator.login(
         secret=secret,
         client_id=options.get("client-id"),
         client_secret=options.get("client-secret"),
-        dry_run=bool(options.get("dry-run")) or session.dry_run,
+        dry_run=dry_run,
+        skip_launch=skip_launch,
+        install_cli=install_cli,
     )
     for warning in outcome.warnings:
         ui.warning(warning)
@@ -77,11 +111,54 @@ def login(session: SessionManager, args: list[str], *, picker: Picker = select) 
     state = outcome.state
     if state.connected:
         session.switch_provider(entry.provider)
+        if entry.provider == "cursor":
+            _adopt_cursor_model(session)
         detail = f" as {state.account}" if state.account else ""
         ui.success(f"{entry.label} connected{detail} · auth: {state.method.label}")
-        ui.note("run /model to choose a model")
+        ui.note("run /model to choose a model, or /switch to change provider or model")
         return RouteResult()
     return RouteResult(exit_code=10, warning=f"{entry.label} is still not connected")
+
+
+def _adopt_cursor_model(session: SessionManager) -> None:
+    """Persist a real Cursor model id so later commands do not look unconfigured."""
+    from ..ai.cursor import preferred_model
+
+    try:
+        names = session.provider().list_models()
+    except RNAgentError:
+        return
+    chosen = preferred_model(names)
+    if not chosen:
+        return
+    session.switch_model(chosen)
+    ui.note(f"model set to {chosen} · /model to change it")
+
+
+def _cursor_secret(
+    entry: ProviderAuth, options: dict[str, str | bool], picker: Picker
+) -> tuple[str | None, bool]:
+    """Cursor's session lives in the Cursor CLI. Offer that, or a CI key."""
+    action = choose(
+        "How do you want to connect Cursor?",
+        (
+            Action(
+                "session",
+                "Cursor CLI session",
+                "opens Cursor's sign-in page in your browser; we never copy the key",
+            ),
+            Action("key", "Paste CURSOR_API_KEY", "for CI, or if the CLI is not installed"),
+            Action("cancel", "Cancel"),
+        ),
+        default="session",
+        picker=picker,
+    )
+    if action == "cancel":
+        return None, True
+    if action == "key":
+        secret = _read_key(entry, options)
+        return secret, secret is None
+    return None, False
 
 
 def _read_key(entry: ProviderAuth, options: dict[str, str | bool]) -> str | None:
@@ -111,9 +188,9 @@ def logout(session: SessionManager, args: list[str], *, picker: Picker = select)
         return RouteResult(
             message=f"signed out of {', '.join(removed)}" if removed else "nothing was stored"
         )
-    name = positional[0] if positional else session.provider_name
+    name = positional[0] if positional else _pick_logout_provider(session, picker)
     if not name:
-        return RouteResult(exit_code=1, warning="no provider given and none selected")
+        return RouteResult(message="cancelled")
     entry = _provider_entry(session, name)
     if session.auth.for_provider(entry.provider).logout():
         return RouteResult(message=f"signed out of {entry.label}")
@@ -175,12 +252,50 @@ def provider(session: SessionManager, args: list[str], *, picker: Picker = selec
             )
         )
     ui.success(f"provider: {entry.label} · auth: {state.method.label}")
-    ui.note(f"model reset to {session.model_name} · /model to choose another")
+    ui.note(f"model reset to {session.model_name} · /model or /switch to choose another")
     return RouteResult()
 
 
+def switch(session: SessionManager, args: list[str], *, picker: Picker = select) -> RouteResult:
+    """Change which account or which model answers, without leaving the session.
+
+    ``/switch`` with no argument asks which of those two you mean. A name is
+    resolved as a provider first (``/switch anthropic``, ``/switch claude``) and
+    as a model otherwise (``/switch sonnet``), so the command people type in
+    omp works the same way here.
+    """
+    positional, _options = parse_flags(args)
+    if positional:
+        token = positional[0].casefold()
+        if token in {"provider", "account"}:
+            return provider(session, positional[1:], picker=picker)
+        if token in {"model", "models"}:
+            return model(session, positional[1:], picker=picker)
+        try:
+            resolve_spec(positional[0])
+        except RNAgentError:
+            return model(session, positional, picker=picker)
+        return provider(session, positional, picker=picker)
+
+    action = choose(
+        "Switch",
+        (
+            Action("provider", "Provider", "which account answers this session"),
+            Action("model", "Model", "which model answers this session"),
+            Action("cancel", "Cancel"),
+        ),
+        default="model",
+        picker=picker,
+    )
+    if action == "provider":
+        return provider(session, [], picker=picker)
+    if action == "model":
+        return model(session, [], picker=picker)
+    return RouteResult(message="cancelled")
+
+
 def _pick_provider(session: SessionManager, picker: Picker, *, purpose: str) -> str | None:
-    """The provider list, annotated with each one's real auth method."""
+    """The provider list, grouped by how you actually sign in."""
     choices: list[Choice] = []
     for entry in session.auth.providers():
         capability = session.auth.capability(entry.provider)
@@ -191,13 +306,41 @@ def _pick_provider(session: SessionManager, picker: Picker, *, purpose: str) -> 
                 value=entry.provider,
                 label=entry.label,
                 hint=f"auth: {capability.label} · {state.status_word}",
+                group=AUTH_GROUP[capability.method],
                 current=entry.provider == session.provider_name,
                 note=note,
             )
         )
-    title = "AI Provider" if purpose == "login" else "Select Provider"
+    title = "Login" if purpose == "login" else "Select Provider"
     chosen = picker(title, choices, footer="↑↓ Navigate   Enter Select   Esc Cancel")
     return chosen.value if chosen else None
+
+
+def _pick_logout_provider(session: SessionManager, picker: Picker) -> str | None:
+    """Who to sign out of. Non-interactive sessions fall back to the active provider."""
+    connected = [
+        entry
+        for entry in session.auth.providers()
+        if session.auth.state(entry.provider).connected
+        and session.auth.capability(entry.provider).method is not AuthMethod.NONE
+    ]
+    if not connected:
+        return session.provider_name
+    if len(connected) == 1 and not session.provider_name:
+        return connected[0].provider
+    choices = [
+        Choice(
+            value=entry.provider,
+            label=entry.label,
+            hint=session.auth.capability(entry.provider).label,
+            current=entry.provider == session.provider_name,
+        )
+        for entry in connected
+    ]
+    chosen = picker("Logout", choices, footer="↑↓ Navigate   Enter Select   Esc Cancel")
+    if chosen is not None:
+        return chosen.value
+    return session.provider_name
 
 
 def _provider_entry(session: SessionManager, name: str) -> ProviderAuth:
@@ -474,6 +617,14 @@ def session_commands(*, picker: Picker = select, router: Any = None) -> dict[str
 
         return run_wizard(session, args, picker=picker)
 
+    def _wizard_upgrade(
+        session: SessionManager, args: list[str], *, picker: Picker
+    ) -> RouteResult:
+        """``/upgrade`` asks which React Native version; the engine is unchanged."""
+        from .wizard import upgrade as run_wizard
+
+        return run_wizard(session, args, picker=picker)
+
     entries = [
         SlashCommand(
             name="help",
@@ -484,14 +635,14 @@ def session_commands(*, picker: Picker = select, router: Any = None) -> dict[str
         ),
         SlashCommand(
             name="login",
-            summary="Connect an AI account (OAuth where the provider offers it)",
+            summary="Connect an AI account (the real flow for that provider)",
             handler=bind(login, picker=picker),
             group="Session",
             usage="/login [provider] [--api-key K] [--client-id ID]",
         ),
         SlashCommand(
             name="logout",
-            summary="Forget a stored credential or OAuth session",
+            summary="Sign out of a stored credential or OAuth session",
             handler=bind(logout, picker=picker),
             group="Session",
             usage="/logout [provider] [--all]",
@@ -517,6 +668,14 @@ def session_commands(*, picker: Picker = select, router: Any = None) -> dict[str
             usage="/model [name] [--task migration] [--list] [--refresh]",
         ),
         SlashCommand(
+            name="switch",
+            summary="Switch provider or model, keeping the conversation",
+            handler=bind(switch, picker=picker),
+            group="Session",
+            usage="/switch [provider|model|name]",
+            aliases=("sw",),
+        ),
+        SlashCommand(
             name="status",
             summary="Project, account, model, git and token usage",
             handler=status,
@@ -528,6 +687,13 @@ def session_commands(*, picker: Picker = select, router: Any = None) -> dict[str
             handler=context_command,
             group="Session",
             usage="/context [query] [--changed]",
+        ),
+        SlashCommand(
+            name="upgrade",
+            summary="Upgrade React Native (pick a version), or JavaScript dependencies",
+            handler=bind(_wizard_upgrade, picker=picker),
+            group="Maintain",
+            usage="/upgrade [--to VERSION] [--deps] [--target patch|minor|latest]",
         ),
         SlashCommand(
             name="migrate",

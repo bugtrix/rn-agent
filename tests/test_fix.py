@@ -252,6 +252,52 @@ def test_a_native_edit_needs_allow_native(project, fake_ai, ai_config):
     assert allowed.report.applied == ["android/gradle.properties"]
 
 
+def test_file_flag_permits_that_native_file_only(project, fake_ai, ai_config):
+    manifest = "android/app/src/main/AndroidManifest.xml"
+    fake_ai.reply(proposal(path=manifest, content="<manifest />\n"))
+
+    command, _ = run(
+        project,
+        config=ai_config,
+        instruction="add a permission",
+        files=(manifest,),
+        checks=(),
+    )
+    assert command.report.applied == [manifest]
+
+    fake_ai.reply(proposal(path="android/gradle.properties", content="newArchEnabled=true\n"))
+    other, _ = run(
+        project,
+        config=ai_config,
+        instruction="enable new arch",
+        files=(manifest,),
+        checks=(),
+    )
+    assert other.report.applied == []
+    assert [item.rule for item in other.report.refused] == [
+        "forbid_native_edits_without_confirmation"
+    ]
+
+
+def test_allow_native_paths_in_rules_yaml_permits_the_edit(project, fake_ai, ai_config):
+    manifest = "android/app/src/main/AndroidManifest.xml"
+    paths = project.paths()
+    paths.ensure()
+    paths.rules_file.write_text(
+        "rules:\n"
+        "  forbid_native_edits_without_confirmation: true\n"
+        "  allow_native_paths:\n"
+        f"    - {manifest}\n",
+        encoding="utf-8",
+    )
+    fake_ai.reply(proposal(path=manifest, content="<manifest />\n"))
+
+    command, _ = run(
+        project, config=ai_config, instruction="add a permission", checks=()
+    )
+    assert command.report.applied == [manifest]
+
+
 # --- dry run and reporting -------------------------------------------------
 def test_dry_run_writes_nothing(project, fake_ai, ai_config):
     original = (project.root / TARGET).read_text()

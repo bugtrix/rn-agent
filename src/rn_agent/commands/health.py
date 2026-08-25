@@ -1,8 +1,9 @@
 """``rn-agent health`` - real diagnostics across RN, JS, Android and iOS.
 
-Strictly read-only. It reuses the context produced by ``scan`` (refreshing it
-automatically when it is missing or stale) and runs the deterministic analyzers.
-No AI is involved at any point.
+Strictly read-only. It reuses the context produced by ``scan``, refreshing it
+when it is missing, older than a day, or older than a file the scan reads
+(so a permission added to the manifest is gone from this report on the next
+run). No AI is involved at any point.
 """
 
 from __future__ import annotations
@@ -148,7 +149,7 @@ class HealthCommand(AgentCommand[HealthAnalysis, HealthPlan]):
 
     # -- helpers -----------------------------------------------------------
     def _project_context(self) -> tuple[ProjectContext, bool]:
-        """Use the stored brain; rescan when missing, stale or requested."""
+        """Use the stored brain; rescan when missing, stale, outdated or requested."""
         return self.context.ensure_project(
             refresh=self.refresh,
             probe_tools=True,

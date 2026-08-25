@@ -59,7 +59,12 @@ class StatusSnapshot:
 
     @property
     def ready(self) -> bool:
-        return bool(self.provider and self.model and self.connected)
+        if not (self.provider and self.connected):
+            return False
+        # Cursor's CLI picks an account default when no model is stored.
+        if self.provider == "cursor":
+            return True
+        return bool(self.model)
 
     @property
     def auth_label(self) -> str:

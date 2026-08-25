@@ -108,6 +108,7 @@ class FeatureCommand(AgentCommand[FeatureAnalysis, FeaturePlan]):
             rules=ProjectRules.load(self.context.paths),
             task="feature",
             allow_dependencies=self.allow_dependencies,
+            allowed_native_paths=self.files,
             keep_on_failure=self.keep_on_failure,
         )
         kept, refused = workflow.screen(analysis.proposals.proposals)

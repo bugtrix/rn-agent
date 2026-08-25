@@ -23,6 +23,8 @@ from ..utils.io import write_json, write_yaml
 RULES_HEADER = """\
 # Project-specific rules the agent must respect.
 # `rn-agent scan` seeds this from the detected architecture; edit freely.
+# Native files stay blocked unless you pass --allow-native, name them with
+# --file, or list them under rules.allow_native_paths (globs allowed).
 """
 
 
@@ -169,6 +171,7 @@ class ScanCommand(AgentCommand[ScanAnalysis, ScanPlan]):
                 "language": architecture.language,
                 "forbid_new_dependencies": True,
                 "forbid_native_edits_without_confirmation": True,
+                "allow_native_paths": [],
             },
             "notes": [
                 "rn-agent must not introduce a different state-management or data-fetching "

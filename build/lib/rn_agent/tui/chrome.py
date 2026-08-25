@@ -151,8 +151,8 @@ def render_auth_table(rows: list[tuple[str, str, str, str]]) -> None:
 def spinner_text(action: str, snapshot: StatusSnapshot) -> str:
     """Progress label that names the model doing the work.
 
-    A developer waiting on a request should be able to see which account is
-    being spent, without checking the status bar.
+    The live wait line is ``Working...`` (see ``cli.working``). This string is
+    the quieter status-bar form: which account is being spent.
     """
     model = snapshot.model or "model"
     provider = snapshot.provider_label or snapshot.provider or "provider"

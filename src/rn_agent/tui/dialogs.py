@@ -69,11 +69,11 @@ def confirm(
     no_label: str = "No",
     picker: Picker = select,
 ) -> bool:
-    """A yes/no gate. Falls back to ``ui.confirm`` when there is no tty."""
+    """A yes/no gate. A missing picker or a non-interactive terminal uses ``default``."""
     answer = choose(
         question,
         (Action("yes", yes_label), Action("no", no_label)),
-        default=None,
+        default="yes" if default else "no",
         picker=picker,
     )
     if answer is None:

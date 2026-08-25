@@ -152,6 +152,7 @@ def test_scan_seeds_rules_from_the_detected_architecture(project):
     rules = yaml.safe_load((project.root / ".rn-agent" / "rules.yaml").read_text())
     assert "redux-saga" in rules["rules"]["allowed_state_management"]
     assert rules["rules"]["forbid_new_dependencies"] is True
+    assert rules["rules"]["allow_native_paths"] == []
 
 
 def test_scan_does_not_overwrite_edited_rules(project):
@@ -283,6 +284,25 @@ def test_health_refresh_updates_the_context(project):
     invoke("--path", str(project.root), "health", "--refresh")
     payload = json.loads(context_file.read_text())
     assert payload["android"]["target_sdk"] == 36
+
+
+def test_health_drops_a_resolved_finding_without_refresh(project):
+    """A manifest fix must leave the next health run, not wait 24 hours."""
+    import os
+
+    project.write_package_json(dependencies={"@react-native-firebase/messaging": "^21.0.0"})
+    project.android(permissions=("android.permission.INTERNET",))
+    invoke("--path", str(project.root), "scan", "--no-tools")
+    before = invoke("--path", str(project.root), "health")
+    assert "POST_NOTIFICATIONS" in before.output
+
+    context_file = project.root / ".rn-agent" / "project-context.json"
+    os.utime(context_file, (1, 1))
+    project.android(
+        permissions=("android.permission.INTERNET", "android.permission.POST_NOTIFICATIONS")
+    )
+    after = invoke("--path", str(project.root), "health")
+    assert "POST_NOTIFICATIONS is required" not in after.output
 
 
 def test_health_json_works_in_dry_run(project):

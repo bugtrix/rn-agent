@@ -34,6 +34,7 @@ class EditWorkflow:
     task: str
     allow_dependencies: bool = False
     allow_native: bool = False
+    allowed_native_paths: tuple[str, ...] = ()
     keep_on_failure: bool = False
     applier: EditApplier = field(init=False)
     rolled_back: bool = field(init=False, default=False)
@@ -44,6 +45,7 @@ class EditWorkflow:
             rules=self.rules,
             allow_dependencies=self.allow_dependencies,
             allow_native=self.allow_native,
+            allowed_native_paths=self.allowed_native_paths,
         )
 
     # -- screening ---------------------------------------------------------

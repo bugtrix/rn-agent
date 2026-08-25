@@ -425,9 +425,17 @@ def test_an_explicit_key_is_stored_even_when_the_provider_needs_none(tmp_path):
     assert "cur_key_0123456789" not in result.output
 
 
-def test_no_key_is_ever_prompted_for_a_tool_provider(tmp_path):
+def test_no_key_is_ever_prompted_for_a_tool_provider(tmp_path, monkeypatch):
     """With no --api-key and no --stdin there is nothing to ask for: the tool is
-    already signed in, and a prompt would imply otherwise."""
+    already signed in, and a prompt would imply otherwise.
+
+    ``--no-verify`` must not spawn ``cursor-agent login`` either: CI and tests
+    have no browser to complete it.
+    """
+    monkeypatch.setattr(
+        "rn_agent.tools.cursor.run_sign_in",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not spawn login")),
+    )
     result = invoke("login", "cursor", "--no-verify")
 
     assert result.exit_code == 0, result.output

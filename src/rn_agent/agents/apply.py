@@ -69,6 +69,7 @@ class EditApplier:
     rules: ProjectRules
     allow_dependencies: bool = False
     allow_native: bool = False
+    allowed_native_paths: tuple[str, ...] = ()
 
     # -- screening ---------------------------------------------------------
     def screen(self, edits: Sequence[FileEdit]) -> tuple[list[FileEdit], list[RuleViolation]]:
@@ -77,6 +78,7 @@ class EditApplier:
             edits,
             allow_dependencies=self.allow_dependencies,
             allow_native=self.allow_native,
+            allowed_native_paths=self.allowed_native_paths,
         )
         blocked = {violation.path for violation in violations}
         if not self.context.config.safety.allow_native_edits:

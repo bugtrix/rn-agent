@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -395,6 +396,10 @@ class ToolAuthenticator(Authenticator):
     leak from. A key is still accepted (CI has no browser), and when one is
     given it takes precedence, because that is what the developer asked for.
 
+    Interactive ``login`` *runs* that tool's sign-in command so the developer
+    sees Cursor's own browser page, not a prompt to copy a command. ``--no-verify``,
+    a dry run, a pipe, or an explicit key skip the spawn.
+
     ``state()`` is deliberately optimistic about the tool's own session: proving
     it would mean spawning the binary on every status render. ``--check`` is the
     authoritative answer, and it says which mechanism was live.
@@ -405,6 +410,7 @@ class ToolAuthenticator(Authenticator):
     sign_in_command: str = ""
     detail: str = ""
     docs_url: str | None = None
+    launcher: Callable[..., object] | None = None
     logger: logging.Logger = field(default_factory=lambda: get_logger("auth"))
 
     @property
@@ -434,14 +440,33 @@ class ToolAuthenticator(Authenticator):
         secret = options.get("secret")
         if secret and self.api_key is not None:
             return self.api_key.login(**options)
-        return AuthOutcome(
-            state=self.state(),
-            warnings=(
-                f"{self.tool} keeps its own login - run `{self.sign_in_command}` to sign in"
-                if self.sign_in_command
-                else f"{self.tool} keeps its own login",
-            ),
-        )
+        if options.get("dry_run"):
+            return AuthOutcome(
+                state=self.state(),
+                warnings=("dry run: would open Cursor's sign-in page in your browser",),
+            )
+        skip = options.get("skip_launch")
+        if skip is None:
+            # A pipe, a test, or a missing TTY must not hang on a browser.
+            skip = not (sys.stdin.isatty() and sys.stdout.isatty())
+        if skip:
+            return AuthOutcome(
+                state=self.state(),
+                warnings=(
+                    f"{self.tool} keeps its own login - run `{self.sign_in_command}` to sign in"
+                    if self.sign_in_command
+                    else f"{self.tool} keeps its own login",
+                ),
+            )
+        launch = self.launcher
+        if launch is None:
+            from ..tools.cursor import run_sign_in
+
+            launch = run_sign_in
+        result = launch(install=bool(options.get("install_cli")))
+        binary = str(result) if result else None
+        self.logger.info("%s CLI sign-in complete", self.provider)
+        return AuthOutcome(state=self.state(), stored=False, binary=binary)
 
     def logout(self) -> bool:
         """Forget the key rn-agent stored. The tool's own session is not ours."""

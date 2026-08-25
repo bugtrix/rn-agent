@@ -34,11 +34,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..ai.cursor import EXECUTABLES
 from ..core.logging import get_logger
 from ..errors import RNAgentError
 from ..models.proposal import EditAction, FileEdit
 from ..runner.command_runner import CommandRunner
+from ..tools.cursor import MISSING_HINT, resolve_binary
 from ..utils.io import read_text
 from .rules import ProjectRules, RuleViolation
 
@@ -117,14 +117,22 @@ class CursorAgentRunner:
     timeout: float = 900.0
     allow_native: bool = False
     allow_dependencies: bool = False
+    allowed_native_paths: tuple[str, ...] = ()
     credential: str | None = None
     logger: logging.Logger = field(default_factory=lambda: get_logger("agents"))
+
+    def _native_confirmed(self) -> bool:
+        return (
+            self.allow_native
+            or bool(self.rules.allow_native_paths)
+            or bool(self.allowed_native_paths)
+        )
 
     # -- permissions -------------------------------------------------------
     def deny_list(self) -> list[str]:
         """The project's rules, in Cursor's permission vocabulary."""
         denied = list(ALWAYS_DENY)
-        if self.rules.forbid_native_edits_without_confirmation and not self.allow_native:
+        if self.rules.forbid_native_edits_without_confirmation and not self._native_confirmed():
             denied.extend(NATIVE_DENY)
         if self.rules.forbid_new_dependencies and not self.allow_dependencies:
             denied.extend(DEPENDENCY_DENY)
@@ -180,15 +188,12 @@ class CursorAgentRunner:
 
     # -- the run -----------------------------------------------------------
     def executable(self) -> str:
-        for candidate in EXECUTABLES:
-            if self.runner.which(candidate):
-                return candidate
+        found = resolve_binary(runner=self.runner)
+        if found is not None:
+            return str(found)
         raise RNAgentError(
             "the Cursor CLI is not installed",
-            hint=(
-                "Install it with `curl https://cursor.com/install -fsS | bash`, "
-                "then run `cursor-agent login`."
-            ),
+            hint=MISSING_HINT,
         )
 
     def argv(self, task: str) -> list[str]:
@@ -204,6 +209,7 @@ class CursorAgentRunner:
             "--print",
             "--output-format",
             "json",
+            "--trust",
             "--force",
             "--workspace",
             str(self.root),
@@ -270,6 +276,7 @@ class CursorAgentRunner:
             edits,
             allow_dependencies=self.allow_dependencies,
             allow_native=self.allow_native,
+            allowed_native_paths=self.allowed_native_paths,
         )
 
 

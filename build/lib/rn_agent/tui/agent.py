@@ -101,10 +101,11 @@ def _converse(session: SessionManager, text: str) -> RouteResult:
     )
 
     provider = session.provider()
-    label = f"{provider.name} {session.model_name}"
     try:
-        with ui.console().status(f"[muted]thinking · {label}[/muted]", spinner="dots"):
+        with ui.working():
             completion = provider.complete(messages, task="default")
+    except KeyboardInterrupt:
+        return RouteResult(warning="cancelled")
     except RNAgentError as error:
         detail = f"{error.message}" + (f" - {error.hint}" if error.hint else "")
         return RouteResult(exit_code=error.exit_code, warning=detail)

@@ -145,14 +145,20 @@ class AuthOutcome:
     warnings: tuple[str, ...] = ()
     #: Models the provider reported during verification, when it did.
     models: tuple[str, ...] = ()
+    #: Absolute path of a local CLI this login just ran, so verify uses the
+    #: same binary rather than looking it up again on a PATH that may omit it.
+    binary: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             **self.state.as_dict(),
             "stored": self.stored,
             "warnings": list(self.warnings),
             "models": list(self.models),
         }
+        if self.binary:
+            payload["binary"] = self.binary
+        return payload
 
 
 @dataclass

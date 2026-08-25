@@ -16,7 +16,10 @@ from ..models.review import REVIEW_AREAS
 from ..validation.runner import STEP_NAMES
 from .runtime import as_tuple, build_context, execute, resolve_checks
 
-FILE_HELP = "Limit to this file or directory (repeatable)."
+FILE_HELP = (
+    "Limit to this file or directory (repeatable). A native path is confirmation "
+    "to edit that file without --allow-native."
+)
 CHECK_HELP = f"Validation step to run afterwards (repeatable): {', '.join(STEP_NAMES)}."
 
 
@@ -75,7 +78,14 @@ def fix(
         bool, typer.Option("--no-check", help="Skip validation after applying.")
     ] = False,
     allow_native: Annotated[
-        bool, typer.Option("--allow-native", help="Permit edits under android/ and ios/.")
+        bool,
+        typer.Option(
+            "--allow-native",
+            help=(
+                "Permit any android/ios edit. Prefer --file on the native path, "
+                "or list it in rules.allow_native_paths."
+            ),
+        ),
     ] = False,
     allow_deps: Annotated[
         bool, typer.Option("--allow-deps", help="Permit package.json dependency edits.")
@@ -179,7 +189,11 @@ def delegate(
         bool, typer.Option("--no-check", help="Skip validation after the agent runs.")
     ] = False,
     allow_native: Annotated[
-        bool, typer.Option("--allow-native", help="Permit edits under android/ and ios/.")
+        bool,
+        typer.Option(
+            "--allow-native",
+            help="Permit any android/ios edit, or list paths in rules.allow_native_paths.",
+        ),
     ] = False,
     allow_deps: Annotated[
         bool, typer.Option("--allow-deps", help="Permit package.json dependency edits.")

@@ -35,7 +35,7 @@ UPGRADABLE_KINDS: frozenset[DependencyKind] = frozenset(
     {DependencyKind.PROD, DependencyKind.DEV}
 )
 
-MIGRATE_HINT = "a React Native version change is a migration: use `rn-agent migrate`"
+MIGRATE_HINT = "a React Native version change: use `rn-agent upgrade --to <version>`"
 
 
 def plan_upgrades(

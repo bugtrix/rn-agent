@@ -1,7 +1,9 @@
 """The scanner: builds the shared project brain.
 
 ``rn-agent scan`` runs this once; every other command reads the result from
-``.rn-agent/project-context.json``. Nothing here calls an AI model - the whole
+``.rn-agent/project-context.json`` unless a file that scan reads is newer than
+that file. A resolved health finding must disappear on the next command, not
+after the 24-hour stale window. Nothing here calls an AI model - the whole
 scan is deterministic file reading plus a handful of ``--version`` probes.
 """
 
@@ -342,3 +344,50 @@ def context_age_seconds(paths: AgentPaths) -> float | None:
         return max(0.0, time.time() - paths.context_file.stat().st_mtime)
     except OSError:
         return None
+
+
+#: Files whose contents feed the brain. A later mtime than the context file
+#: means the stored permissions/SDK/plist are no longer what is on disk.
+_CONTEXT_INPUTS: tuple[str, ...] = (
+    "package.json",
+    "app.json",
+    "app.config.js",
+    "app.config.ts",
+    "android/gradle.properties",
+    "android/build.gradle",
+    "android/build.gradle.kts",
+    "android/app/build.gradle",
+    "android/app/build.gradle.kts",
+    "android/app/src/main/AndroidManifest.xml",
+    "android/gradle/wrapper/gradle-wrapper.properties",
+    "ios/Podfile",
+    "ios/Podfile.lock",
+)
+
+
+def context_inputs_newer(paths: AgentPaths) -> bool:
+    """True when a file the scan reads is newer than ``project-context.json``."""
+    try:
+        context_mtime = paths.context_file.stat().st_mtime
+    except OSError:
+        return True
+    root = paths.project_root
+    for relative in _CONTEXT_INPUTS:
+        candidate = root / relative
+        try:
+            if candidate.stat().st_mtime > context_mtime:
+                return True
+        except OSError:
+            continue
+    ios = root / "ios"
+    if ios.is_dir():
+        for pattern in ("Info.plist", "*.pbxproj"):
+            for path in ios.rglob(pattern):
+                if "Pods" in path.parts:
+                    continue
+                try:
+                    if path.stat().st_mtime > context_mtime:
+                        return True
+                except OSError:
+                    continue
+    return False

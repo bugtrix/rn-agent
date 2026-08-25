@@ -234,6 +234,11 @@ def login(
         paths = _paths()
         config = _load(paths)
         spec = resolve_spec(provider_name or config.provider)
+        if not provider_name and not OPTIONS.json_output:
+            ui.note(
+                f"no provider named - signing into configured {spec.label}. "
+                "Pass a name to choose another, e.g. `rn-agent login anthropic`"
+            )
         manager = AuthenticationManager()
         authenticator = manager.for_provider(spec.name)
         capability = authenticator.capability
@@ -251,6 +256,18 @@ def login(
                     ),
                 )
 
+        skip_launch = True
+        install_cli = False
+        if capability.method is AuthMethod.TOOL and not secret:
+            from ..tui.theme import interactive_terminal
+
+            skip_launch = (
+                no_verify
+                or OPTIONS.dry_run
+                or OPTIONS.json_output
+                or not interactive_terminal()
+            )
+
         if not OPTIONS.json_output:
             ui.header(f"Sign in · {spec.label}", f"auth: {capability.label}")
             if capability.detail:
@@ -265,6 +282,15 @@ def login(
                     ui.bullet("No browser here - signing in with a device code")
                 else:
                     ui.bullet(f"Opening {spec.label} in your browser…")
+            elif capability.method is AuthMethod.TOOL and not secret and not skip_launch:
+                from ..tools.cursor import offer_install
+
+                install_cli = offer_install(
+                    assume_yes=OPTIONS.yes,
+                    confirm=lambda question: ui.confirm(question, default=True),
+                )
+                ui.bullet("Opening Cursor's sign-in page in your browser…")
+                ui.note('Sign in, then return here when the page says "All set".')
 
         # Order matters. A key is verified *before* it is stored, so a credential
         # the provider rejects never reaches the keychain. An OAuth session can
@@ -288,6 +314,8 @@ def login(
             device=device,
             announce=None if OPTIONS.json_output else _announce_device,
             dry_run=OPTIONS.dry_run,
+            skip_launch=skip_launch,
+            install_cli=install_cli,
         )
 
         if verify and identity is None and outcome.state.connected:
@@ -298,7 +326,13 @@ def login(
                 credential=manager.credential(spec.name),
                 model=model_name,
                 base_url=base_url,
+                binary=outcome.binary,
             )
+
+        if not model_name and spec.name == "cursor" and identity is not None:
+            from ..ai.cursor import preferred_model
+
+            model_name = preferred_model(identity.models)
 
         patch: dict[str, Any] = {"ai": {"provider": spec.name}}
         if model_name:
@@ -359,6 +393,7 @@ def _verify(
     credential: str | None,
     model: str | None,
     base_url: str | None,
+    binary: str | None = None,
 ) -> Any:
     """Check a credential against the provider's own endpoint.
 
@@ -372,6 +407,8 @@ def _verify(
     if spec.name == "google":
         uses_oauth = getattr(manager.for_provider("google"), "uses_oauth", None)
         extras["oauth"] = bool(uses_oauth()) if callable(uses_oauth) else False
+    if spec.name == "cursor" and binary:
+        extras["binary"] = binary
     provider = build_provider(
         config,
         credential=credential,
@@ -576,7 +613,10 @@ def model(
 
         if show_list:
             spec = resolve_spec(config.provider)
-            if remote:
+            # Cursor has no HTTP catalogue; `--list` without `--remote` would
+            # otherwise print only a bundled hint. Ask the CLI whenever we can.
+            live = remote or spec.name == "cursor"
+            if live:
                 store = _store()
                 credential = store.require(spec)
                 instance = build_provider(
@@ -584,7 +624,9 @@ def model(
                     credential=credential.value if credential else None,
                     provider_name=spec.name,
                 )
-                names, source = instance.list_models(), f"{spec.label} API"
+                names, source = instance.list_models(), (
+                    f"{spec.label} CLI" if spec.name == "cursor" else f"{spec.label} API"
+                )
             else:
                 names, source = spec.suggested_models, "bundled suggestions"
             active = config.model_for(None) or spec.default_model

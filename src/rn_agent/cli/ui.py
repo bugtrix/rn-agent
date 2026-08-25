@@ -19,6 +19,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from ..constants import APP_TITLE, ENV_NO_COLOR
+from .working import working as working
 
 THEME = Theme(
     {

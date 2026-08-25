@@ -71,14 +71,20 @@ STRONG = 0.7
 #: Phrases are matched as whole words against the casefolded request.
 RULES: tuple[tuple[Intent, float, tuple[str, ...]], ...] = (
     (
+        Intent.UPGRADE,
+        0.9,
+        (
+            "upgrade react native",
+            "update react native",
+            "rn upgrade",
+        ),
+    ),
+    (
         Intent.MIGRATE,
         0.9,
         (
             "migrate react native",
-            "upgrade react native",
-            "update react native",
             "move to react native",
-            "rn upgrade",
             "migrate rn",
             "migration",
         ),
@@ -225,7 +231,7 @@ def _adjust(weight: float, request: str, intent: Intent) -> float:
     than an instruction to act on it.
     """
     score = weight
-    if intent in (Intent.MIGRATE, Intent.COMPATIBILITY) and VERSION_RE.search(request):
+    if intent in (Intent.MIGRATE, Intent.COMPATIBILITY, Intent.UPGRADE) and VERSION_RE.search(request):
         score += 0.05
     if request.rstrip().endswith("?"):
         score -= 0.15
@@ -234,12 +240,14 @@ def _adjust(weight: float, request: str, intent: Intent) -> float:
 
 def _arguments(request: str, intent: Intent) -> tuple[str, ...]:
     """Flags the suggestion can be run with, taken from the request itself."""
-    if intent in (Intent.MIGRATE, Intent.COMPATIBILITY):
+    if intent in (Intent.MIGRATE, Intent.COMPATIBILITY, Intent.UPGRADE):
         versions = VERSION_RE.findall(request)
         if versions:
             # The highest version mentioned is the target: "0.84 -> 0.86".
             target = max(versions, key=_version_key)
-            return ("--to", target) if intent is Intent.MIGRATE else ("--target", target)
+            if intent is Intent.COMPATIBILITY:
+                return ("--target", target)
+            return ("--to", target)
     return ()
 
 

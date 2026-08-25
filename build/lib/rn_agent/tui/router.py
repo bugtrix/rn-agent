@@ -81,7 +81,7 @@ CLI_COMMANDS: tuple[tuple[str, str, str, bool], ...] = (
     # Not `needs_ai`: this one needs the *Cursor* CLI, not rn-agent's provider,
     # and it checks for that itself rather than borrowing the wrong gate.
     ("delegate", "Hand a task to the Cursor agent, then audit what it changed", "Develop", False),
-    ("upgrade", "Risk-ranked dependency upgrades", "Maintain", False),
+    ("upgrade", "Upgrade React Native, or JavaScript dependencies", "Maintain", False),
     ("migrate", "Migrate React Native to a newer version", "Maintain", False),
     ("docs", "Write project documentation from the scanned facts", "Maintain", True),
     ("release", "Prepare a release: versions, changelog, checklist", "Maintain", True),

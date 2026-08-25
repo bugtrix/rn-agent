@@ -96,6 +96,7 @@ def test_the_provider_never_passes_force(cursor_cli, project):
     argv = called(cursor_cli)["argv"]
     assert "--force" not in argv
     assert "--yolo" not in argv
+    assert "--trust" in argv
     # Ask mode answers instead of acting; that is the read-only intent, stated.
     assert argv[argv.index("--mode") + 1] == "ask"
     assert "--print" in argv and argv[argv.index("--output-format") + 1] == "json"
@@ -159,13 +160,64 @@ def test_an_oversized_prompt_is_refused_with_a_number(cursor_cli, project):
 
 def test_a_missing_cli_says_how_to_install_it(project, monkeypatch):
     monkeypatch.setenv("PATH", str(project.root))  # nothing on it
+    monkeypatch.delenv("RN_AGENT_CURSOR_BIN", raising=False)
+    monkeypatch.setattr("rn_agent.tools.cursor._vendor_install", lambda: None)
     provider = CursorProvider(model="m")
 
     with pytest.raises(ProviderError) as failure:
         provider.complete([Message.user("hi")])
 
     assert "not installed" in str(failure.value)
-    assert "cursor.com/install" in (failure.value.hint or "")
+    assert "rn-agent login cursor" in (failure.value.hint or "")
+
+
+def test_the_provider_finds_a_managed_cli_off_path(tmp_path, monkeypatch, project):
+    """Login installs under rn-agent's directory, which is frequently not on PATH."""
+    from rn_agent.core.paths import user_config_dir
+    from rn_agent.tools.cursor import EXECUTABLE_NAME
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("RN_AGENT_CURSOR_BIN", raising=False)
+    monkeypatch.setattr("rn_agent.tools.cursor._vendor_install", lambda: None)
+    binary = user_config_dir() / "tools" / EXECUTABLE_NAME / "2026.08.11-test" / EXECUTABLE_NAME
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+    assert Path(CursorProvider(model="m").executable()) == binary
+
+
+def test_the_provider_finds_cursor_in_local_bin(tmp_path, monkeypatch, project):
+    """OMP-style lookup: ~/.local/bin, even when that directory is not on PATH."""
+    bindir = tmp_path / "local-bin"
+    bindir.mkdir()
+    binary = bindir / "cursor-agent"
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("RN_AGENT_CURSOR_BIN", raising=False)
+    monkeypatch.setattr("rn_agent.tools.cursor.extra_bin_dirs", lambda: (bindir,))
+
+    assert Path(CursorProvider(model="m").executable()) == binary.resolve()
+
+
+def test_an_explicit_binary_is_used_for_verify(tmp_path, monkeypatch, project):
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("RN_AGENT_CURSOR_BIN", raising=False)
+    monkeypatch.setattr("rn_agent.tools.cursor._vendor_install", lambda: None)
+    chosen = tmp_path / "given-agent"
+    chosen.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    chosen.chmod(0o755)
+
+    assert Path(CursorProvider(model="m", binary=str(chosen)).executable()) == chosen
+
+
+def test_login_prefers_a_composer_model():
+    from rn_agent.ai.cursor import preferred_model
+
+    assert preferred_model(("gpt-5", "composer-2.5", "claude-sonnet-5")) == "composer-2.5"
+    assert preferred_model(()) is None
+    assert preferred_model(("auto",)) == "auto"
 
 
 def test_a_failing_cli_surfaces_its_own_message(tmp_path, monkeypatch, project):
@@ -180,6 +232,24 @@ def test_a_failing_cli_surfaces_its_own_message(tmp_path, monkeypatch, project):
         CursorProvider(model="m").complete([Message.user("hi")])
 
     assert "not logged in" in str(failure.value)
+
+
+def test_workspace_trust_is_not_reported_as_a_cursor_outage(tmp_path, monkeypatch, project):
+    bin_dir = tmp_path / "trust-bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "cursor-agent"
+    stub.write_text(
+        "#!/bin/sh\necho 'Workspace Trust Required. Do you trust the contents of this directory?' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+    with pytest.raises(ProviderError) as failure:
+        CursorProvider(model="m").complete([Message.user("hi")])
+
+    assert "workspace trust" in str(failure.value).casefold()
+    assert "failing on its side" not in (failure.value.hint or "")
 
 
 def test_an_agent_error_result_is_a_failure_not_an_answer(tmp_path, monkeypatch, project):
@@ -221,7 +291,7 @@ def test_models_come_from_the_cli_not_a_bundled_list(cursor_cli, project):
     provider = CursorProvider()
 
     assert provider.list_models() == ("composer-2.5", "claude-sonnet-5")
-    assert CursorProvider.suggested_models == ()
+    assert CursorProvider.suggested_models == ("composer-2.5",)
     assert CursorProvider.default_model == ""
 
 
@@ -270,6 +340,26 @@ def test_logging_out_of_cursor_never_touches_cursors_own_session():
     assert manager.for_provider("cursor").logout() is False
 
 
+def test_sign_in_runs_the_cursor_cli_login(cursor_cli):
+    """The browser page is Cursor's. We only spawn the command that opens it."""
+    from rn_agent.tools.cursor import run_sign_in
+
+    run_sign_in(install=False)
+
+    assert called(cursor_cli)["argv"] == ["login"]
+
+
+def test_sign_in_without_the_cli_explains_how_to_install(tmp_path, monkeypatch):
+    from rn_agent.tools.cursor import ManagedCursorCli, run_sign_in
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("RN_AGENT_CURSOR_BIN", raising=False)
+    monkeypatch.setattr("rn_agent.tools.cursor._vendor_install", lambda: None)
+
+    with pytest.raises(RNAgentError, match="not installed"):
+        run_sign_in(install=False, cli=ManagedCursorCli(root=tmp_path / "managed"))
+
+
 # ---------------------------------------------------------------------------
 # delegation: the deny list is the guard rail
 # ---------------------------------------------------------------------------
@@ -311,6 +401,36 @@ def test_the_allow_flags_lift_exactly_what_they_name(project):
     assert "Write(package.json)" not in denied
     # And nothing else moved.
     assert "Write(**/yarn.lock)" in denied
+
+
+def test_allow_native_paths_lifts_the_cursor_native_deny(project):
+    runner = runner_for(
+        project,
+        rules=ProjectRules(allow_native_paths=("android/app/src/main/AndroidManifest.xml",)),
+    )
+
+    denied = runner.deny_list()
+
+    assert "Write(android/**)" not in denied
+    assert "Write(package.json)" in denied
+
+
+def test_audit_honours_allow_native_paths(project):
+    (project.root / "android").mkdir(exist_ok=True)
+    (project.root / "android" / "build.gradle").write_text("// edited\n", encoding="utf-8")
+    manifest = project.root / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("<manifest />\n", encoding="utf-8")
+    runner = runner_for(
+        project,
+        rules=ProjectRules(allow_native_paths=("android/app/src/main/AndroidManifest.xml",)),
+    )
+
+    violations = runner.audit(
+        ["android/app/src/main/AndroidManifest.xml", "android/build.gradle"]
+    )
+
+    assert {item.path for item in violations} == {"android/build.gradle"}
 
 
 def test_the_deny_list_merges_into_the_developers_own_config(project):

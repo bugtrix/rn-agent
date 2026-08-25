@@ -54,12 +54,15 @@ class AIEngine:
         """One model call, accounted for and logged."""
         provider = self.context.ai
         model = self.context.config.ai.model_for(task)
-        completion = provider.complete(
-            messages,
-            model=model,
-            max_output_tokens=max_output_tokens,
-            task=task,
-        )
+        from ..cli.working import working
+
+        with working():
+            completion = provider.complete(
+                messages,
+                model=model,
+                max_output_tokens=max_output_tokens,
+                task=task,
+            )
         self.completions.append(completion)
         self.context.record_ai_usage(completion)
         self.context.logger.debug(

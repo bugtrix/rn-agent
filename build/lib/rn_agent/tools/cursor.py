@@ -33,6 +33,7 @@ import platform
 import re
 import shutil
 import stat
+import subprocess
 import tarfile
 import tempfile
 from collections.abc import Callable
@@ -70,7 +71,17 @@ ENV_VERSION = "RN_AGENT_CURSOR_VERSION"
 #: Set to an absolute path to use a binary rn-agent did not install.
 ENV_BINARY = "RN_AGENT_CURSOR_BIN"
 
+MISSING_HINT = (
+    f"Run `rn-agent login cursor` to install the Cursor CLI and sign in, "
+    f"or set {ENV_BINARY} to the binary."
+)
+
 DOWNLOAD_TIMEOUT = 600.0
+
+#: Browser consent can sit on Cursor's page while the developer finds an account.
+LOGIN_TIMEOUT = 600.0
+
+INSTALL_QUESTION = "The Cursor CLI is not installed yet (~75 MB). Download it now?"
 
 
 def platform_slug() -> tuple[str, str]:
@@ -159,7 +170,6 @@ class ManagedCursorCli:
             if found:
                 return Path(found)
         return _vendor_install()
-        return None
 
     def locate(self) -> Path | None:
         """Whatever is usable right now, without installing anything."""
@@ -250,7 +260,7 @@ class ManagedCursorCli:
         if not install:
             raise RNAgentError(
                 "the Cursor CLI is not installed yet",
-                hint="Run `rn-agent login cursor` and rn-agent will install it for you.",
+                hint=MISSING_HINT,
             )
         return self.install(on_progress=on_progress)
 
@@ -306,3 +316,93 @@ def _extract(archive: Path, destination: Path) -> None:
 def cursor_cli(**kwargs: object) -> ManagedCursorCli:
     """The managed Cursor CLI, with rn-agent's default locations."""
     return ManagedCursorCli(**kwargs)  # type: ignore[arg-type]
+
+
+def extra_bin_dirs() -> tuple[Path, ...]:
+    """Directories Cursor's installer uses that are often missing from PATH."""
+    home = Path.home()
+    return (
+        home / ".local" / "bin",
+        home / "bin",
+        home / ".cursor" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+    )
+
+
+def search_path() -> str:
+    """``PATH`` plus Cursor's well-known bin dirs, so lookup matches OMP."""
+    extras = [str(path) for path in extra_bin_dirs() if path.is_dir()]
+    current = os.environ.get("PATH", "")
+    return os.pathsep.join([*extras, current]) if extras else current
+
+
+def resolve_binary(*, runner: CommandRunner | None = None) -> Path | None:
+    """PATH, Cursor's own install, or the copy rn-agent manages. Never downloads."""
+    _ = runner
+    return cursor_cli().locate()
+
+
+def _vendor_install() -> Path | None:
+    """Cursor's own installer symlink, even when ``~/.local/bin`` is not on PATH."""
+    for directory in extra_bin_dirs():
+        for name in PATH_NAMES:
+            candidate = directory / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate.resolve()
+    return None
+
+
+def offer_install(*, assume_yes: bool, confirm: Callable[[str], bool]) -> bool:
+    """Whether ``run_sign_in`` should download the CLI.
+
+    ``False`` means one is already on the machine. ``True`` means the developer
+    agreed to a ~75 MB fetch. Declining is an error, not a silent skip: login
+    cannot finish without the binary.
+    """
+    if cursor_cli().locate() is not None:
+        return False
+    if assume_yes or confirm(INSTALL_QUESTION):
+        return True
+    raise RNAgentError(
+        "the Cursor CLI is not installed",
+        hint=MISSING_HINT,
+    )
+
+
+def run_sign_in(
+    *,
+    install: bool = False,
+    timeout: float = LOGIN_TIMEOUT,
+    cli: ManagedCursorCli | None = None,
+) -> Path:
+    """Run ``cursor-agent login`` with this terminal attached.
+
+    Cursor's CLI opens *its* sign-in page in the browser and stores the session
+    in its own config. rn-agent never hosts that page and never copies the
+    resulting credential.
+    """
+    manager = cli or cursor_cli()
+    binary = manager.require(install=install)
+    try:
+        completed = subprocess.run(
+            [str(binary), "login"],
+            timeout=timeout,
+            env={**os.environ, "PATH": search_path()},
+        )
+    except FileNotFoundError as exc:
+        raise RNAgentError(
+            "the Cursor CLI is not installed",
+            hint=MISSING_HINT,
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RNAgentError(
+            "Cursor CLI login timed out waiting for the browser",
+            hint="Finish sign-in on the page Cursor opened, or run `cursor-agent login` yourself.",
+        ) from exc
+    if completed.returncode != 0:
+        raise RNAgentError(
+            "Cursor CLI login did not finish",
+            hint="Retry `rn-agent login cursor`, or run `cursor-agent login` yourself.",
+        )
+    return binary
