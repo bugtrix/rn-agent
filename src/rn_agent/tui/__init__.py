@@ -11,8 +11,9 @@ as before. The split inside is deliberate:
   rather than reimplementing it;
 * :mod:`~rn_agent.tui.handlers` - the session-scoped commands that have no CLI
   twin (``/login``, ``/provider``, ``/model``, ``/status``, ``/context``);
-* :mod:`~rn_agent.tui.agent` - what a line of prose does: route to a command, or
-  answer with project context;
+* :mod:`~rn_agent.tui.agent` - what a line of prose does: chat, look things up,
+  and apply the files the prompt asked for, or offer ``/migrate`` /
+  ``/upgrade`` when that is the work;
 * :mod:`~rn_agent.tui.chrome` / :mod:`~rn_agent.tui.dialogs` - the frame and the
   confirmations.
 """

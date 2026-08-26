@@ -190,6 +190,19 @@ def confirm(question: str, default: bool = False) -> bool:
         return False
 
 
+def ask_line(question: str) -> str | None:
+    """One line of free text. ``None`` on a non-interactive terminal or cancel."""
+    from rich.prompt import Prompt
+
+    if not console().is_terminal:
+        return None
+    try:
+        answer = Prompt.ask(question, default="", console=console(), show_default=False)
+    except (EOFError, KeyboardInterrupt):
+        return None
+    return answer.strip() or None
+
+
 def ask_secret(question: str) -> str | None:
     """Prompt for a credential without echoing it.
 

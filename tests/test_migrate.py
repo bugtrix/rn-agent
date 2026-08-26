@@ -381,6 +381,25 @@ def test_the_offline_table_is_used_and_labelled(project):
     assert remote.calls == []
 
 
+def test_existing_typescript_errors_do_not_undo_the_migration(project):
+    """tsc on a messy tree is not proof the bump was wrong."""
+    project.git_init()
+    project.local_bin(
+        "tsc",
+        exit_code=2,
+        output="src/service/axios.ts(17,16): error TS7052: Element implicitly has an 'any' type",
+    )
+    project.local_bin("jest", exit_code=1, output="Preset @react-native/jest-preset not found.")
+    remote = Remote(documents=rn_documents(), diff=DIFF)
+
+    command, outcome = run(project, remote, to_version="0.82.0", install=False)
+
+    assert outcome.exit_code == 0
+    assert outcome.summary["rolled_back"] is False
+    assert command.validation is None
+    assert (project.root / "package.json").read_text() != ""
+
+
 def test_failed_validation_rolls_the_whole_migration_back(project, fake_ai, ai_config):
     project.git_init()
     project.local_bin("tsc", exit_code=2, output="error TS2307: Cannot find module")
@@ -396,6 +415,7 @@ def test_failed_validation_rolls_the_whole_migration_back(project, fake_ai, ai_c
         remote,
         to_version="0.82.0",
         install=False,
+        checks=("typecheck",),
         context={"config": migration_config(config=ai_config)},
     )
 
@@ -436,6 +456,7 @@ def test_an_ai_repair_round_can_save_the_migration(project, fake_ai, ai_config):
         remote,
         to_version="0.82.0",
         install=False,
+        checks=("typecheck",),
         context={"config": migration_config(config=ai_config)},
     )
 

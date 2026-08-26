@@ -67,6 +67,19 @@ def test_fix_by_instruction_writes_the_change(project, fake_ai, ai_config):
     assert outcome.exit_code == 0
 
 
+def test_fix_skips_typecheck_and_tests_unless_asked(project, fake_ai, ai_config):
+    """A failing tree is not a reason to undo a confirmed apply."""
+    project.local_bin("tsc", exit_code=2, output="error TS2307")
+    fake_ai.reply(proposal())
+
+    command, outcome = run(project, config=ai_config, instruction="fix the button")
+
+    assert (project.root / TARGET).read_text() == FIXED
+    assert command.validation is None
+    assert command.report.rolled_back is False
+    assert outcome.exit_code == 0
+
+
 def test_fix_by_issue_id_reads_the_recorded_finding(project, fake_ai, ai_config):
     seed_findings(
         project,
@@ -184,6 +197,30 @@ def test_keep_on_failure_leaves_the_change_and_still_fails(project, fake_ai, ai_
     assert (project.root / TARGET).read_text() == FIXED
     assert command.report.rolled_back is False
     assert outcome.exit_code == 1
+
+
+def test_interactive_fix_keeps_a_failed_proof_without_repair_prompts(
+    project, fake_ai, ai_config, monkeypatch
+):
+    """A TUI /fix must not open Analyse / extra-notes / apply-repair Q&A."""
+    asked: list[str] = []
+    project.local_bin("tsc", exit_code=2, output="error TS2339: Property isLoggedIn")
+    fake_ai.reply(proposal())
+    monkeypatch.setattr("rn_agent.cli.working.working_enabled", lambda: True)
+    context = project.scanned(
+        config=ai_config,
+        command="fix",
+        assume_yes=False,
+        confirmer=lambda question, default: asked.append(question) or True,
+    )
+    command = FixCommand(context, instruction="fix the button", checks=("typecheck",))
+    command.quiet = True
+    outcome = command.run()
+
+    assert (project.root / TARGET).read_text() == FIXED
+    assert command.report.rolled_back is False
+    assert outcome.exit_code == 1
+    assert all("Repair" not in question and "Analyse" not in question for question in asked)
 
 
 def test_passing_validation_keeps_the_change(project, fake_ai, ai_config):

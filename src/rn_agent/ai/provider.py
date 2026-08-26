@@ -147,6 +147,8 @@ class AIProvider(ABC):
                 f"no model selected for {self.name}",
                 hint=self.model_hint or f"Run `rn-agent model {self.default_model or '<name>'}`.",
             )
+        from ..cli.working import working
+
         payload = self._payload(
             list(messages),
             model=chosen,
@@ -154,8 +156,9 @@ class AIProvider(ABC):
             max_output_tokens=max_output_tokens or self.max_output_tokens,
             temperature=self.temperature if temperature is None else temperature,
         )
-        response = self._request("POST", self._completion_path(chosen), payload=payload)
-        completion = self._parse_completion(response.body, model=chosen, task=task)
+        with working():
+            response = self._request("POST", self._completion_path(chosen), payload=payload)
+            completion = self._parse_completion(response.body, model=chosen, task=task)
         self._logger.info(
             "%s %s: %s in / %s out tokens",
             self.name,

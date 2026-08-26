@@ -17,8 +17,18 @@ from rn_agent.agents.apply import EditApplier, describe_dependency_change
 from rn_agent.agents.context_builder import ContextBuilder, estimate_tokens
 from rn_agent.agents.engine import AIEngine
 from rn_agent.agents.output import extract_json, parse_changelog, parse_proposals, parse_review
-from rn_agent.agents.prompts import fix_messages, project_brief, review_messages
-from rn_agent.agents.rules import ProjectRules, dependency_delta, is_native_path, native_path_allowed
+from rn_agent.agents.prompts import (
+    error_fix_messages,
+    fix_messages,
+    project_brief,
+    review_messages,
+)
+from rn_agent.agents.rules import (
+    ProjectRules,
+    dependency_delta,
+    is_native_path,
+    native_path_allowed,
+)
 from rn_agent.errors import ConfirmationDeclined, ModelOutputError
 from rn_agent.models.changes import RiskLevel
 from rn_agent.models.health import Severity
@@ -319,6 +329,77 @@ def test_fix_prompt_lists_the_issues(project):
     assert "COMPLETE FILE CONTENT" in messages[0].content
 
 
+def test_error_fix_messages_include_developer_instructions(project):
+    from rn_agent.agents.context_builder import PromptContext
+    from rn_agent.models.validation import StepStatus, ValidationReport, ValidationStep
+
+    context = scanned(project)
+    report = ValidationReport(
+        steps=[
+            ValidationStep(
+                name="typecheck",
+                status=StepStatus.FAIL,
+                command="tsc --noEmit",
+                output_tail="error TS2322: Type 'Permission' is not assignable",
+            )
+        ]
+    )
+
+    messages = error_fix_messages(
+        project=context.project,
+        rules=ProjectRules(),
+        context=PromptContext(),
+        report=report,
+        what_changed="a migration was applied",
+        instruction="fix LocationServices callbacks; do not loosen the types",
+    )
+
+    body = messages[1].content
+    assert "LocationServices callbacks" in body
+    assert "TS2322" in body
+    assert "The developer added these instructions" in body
+
+
+def test_gather_instruction_accepts_without_a_follow_up(project, fake_ai, ai_config, monkeypatch):
+    from rn_agent.agents.repair import gather_instruction
+
+    asked: list[str] = []
+    context = scanned(project, config=ai_config, assume_yes=False, confirmer=lambda q, d: True)
+    monkeypatch.setattr("rn_agent.agents.repair.ui.ask_line", lambda q: asked.append(q) or "nope")
+
+    assert gather_instruction(context, ["typecheck"], task="fix") == ""
+    assert asked == []
+
+
+def test_a_declined_analysis_skips_the_round(project, fake_ai, ai_config, monkeypatch):
+    from rn_agent.agents.repair import gather_instruction
+
+    asked: list[str] = []
+    context = scanned(project, config=ai_config, assume_yes=False, confirmer=lambda q, d: False)
+    monkeypatch.setattr("rn_agent.agents.repair.ui.ask_line", lambda q: asked.append(q) or "nope")
+
+    assert gather_instruction(context, ["typecheck", "tests"], task="migration") is None
+    assert asked == []
+
+
+def test_gather_instruction_is_asked_once_per_workflow(project, fake_ai, ai_config):
+    from rn_agent.agents.repair import gather_instruction
+    from rn_agent.agents.workflow import EditWorkflow
+
+    asked: list[str] = []
+    context = scanned(
+        project,
+        config=ai_config,
+        assume_yes=False,
+        confirmer=lambda q, d: asked.append(q) or True,
+    )
+    workflow = EditWorkflow(context, rules=ProjectRules(), task="migration")
+
+    assert gather_instruction(context, ["typecheck"], task="migration", workflow=workflow) == ""
+    assert gather_instruction(context, ["typecheck"], task="migration", workflow=workflow) == ""
+    assert len(asked) == 1
+
+
 # ---------------------------------------------------------------------------
 # output parsing
 # ---------------------------------------------------------------------------
@@ -580,6 +661,22 @@ def test_applier_stops_when_the_developer_declines(project):
         applier.apply([FileEdit(path="src/App.tsx", content="x")], reason="fix")
 
     assert not (project.root / "src" / "App.tsx").exists()
+
+
+def test_applier_skips_the_prompt_when_already_confirmed(project):
+    asked: list[str] = []
+    context = project.context(confirmer=lambda question, default: asked.append(question) or False)
+    context.set_project(scanned(project).project)
+    applier = EditApplier(context, rules=ProjectRules())
+
+    outcome = applier.apply(
+        [FileEdit(path="src/App.tsx", content="x\n")],
+        reason="fix",
+        confirmed=True,
+    )
+
+    assert outcome.applied == ("src/App.tsx",)
+    assert asked == []
 
 
 def test_applier_writes_nothing_in_dry_run(project):

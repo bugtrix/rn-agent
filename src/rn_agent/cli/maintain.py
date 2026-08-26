@@ -185,6 +185,14 @@ def migrate(
     no_install: Annotated[
         bool, typer.Option("--no-install", help="Do not run the package manager afterwards.")
     ] = False,
+    check: Annotated[list[str] | None, typer.Option("--check", help=CHECK_HELP)] = None,
+    no_check: Annotated[
+        bool,
+        typer.Option(
+            "--no-check",
+            help="Skip typecheck, tests and pods (this is the default).",
+        ),
+    ] = False,
     build: Annotated[
         bool, typer.Option("--build", help="Also run the Android and iOS builds (slow).")
     ] = False,
@@ -216,6 +224,7 @@ def migrate(
             kinds=as_tuple(kind),
             skip_native=skip_native,
             install=not no_install,
+            checks=resolve_checks(check, disabled=no_check, default=()),
             build=build,
             use_ai=not no_ai,
             offline=offline,

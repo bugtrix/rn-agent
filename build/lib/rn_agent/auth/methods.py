@@ -400,9 +400,12 @@ class ToolAuthenticator(Authenticator):
     sees Cursor's own browser page, not a prompt to copy a command. ``--no-verify``,
     a dry run, a pipe, or an explicit key skip the spawn.
 
-    ``state()`` is deliberately optimistic about the tool's own session: proving
-    it would mean spawning the binary on every status render. ``--check`` is the
-    authoritative answer, and it says which mechanism was live.
+    ``state()`` reports connected when the tool is *present*, not when its session
+    has been proved: proving it means spawning the binary, which is too expensive
+    for a status render. But claiming a session for a tool that is not installed
+    would be a plain lie - and it would make every model picker try to discover
+    models from a CLI that is not there - so presence is checked. ``--check`` is
+    the authoritative answer about the session itself.
     """
 
     api_key: ApiKeyAuthenticator | None = None
@@ -411,6 +414,9 @@ class ToolAuthenticator(Authenticator):
     detail: str = ""
     docs_url: str | None = None
     launcher: Callable[..., object] | None = None
+    #: Cheap "is the binary there?" check - a PATH and directory lookup, never a
+    #: subprocess. ``None`` means presence cannot be established, so not connected.
+    probe: Callable[[], bool] | None = None
     logger: logging.Logger = field(default_factory=lambda: get_logger("auth"))
 
     @property
@@ -423,17 +429,21 @@ class ToolAuthenticator(Authenticator):
             docs_url=self.docs_url,
         )
 
+    def present(self) -> bool:
+        return bool(self.probe()) if self.probe is not None else False
+
     def state(self) -> AuthState:
         stored = self.api_key.state() if self.api_key else None
         if stored is not None and stored.connected:
             # An explicit key wins, and is reported as the key it is.
             return stored
+        installed = self.present()
         return AuthState(
             provider=self.provider,
             method=AuthMethod.TOOL,
-            connected=True,
-            source="tool",
-            label=f"{self.tool} session",
+            connected=installed,
+            source="tool" if installed else None,
+            label=f"{self.tool} session" if installed else f"{self.tool} not installed",
         )
 
     def login(self, **options: Any) -> AuthOutcome:

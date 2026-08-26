@@ -301,15 +301,42 @@ def docs_messages(
 # conversation (the interactive terminal)
 # ---------------------------------------------------------------------------
 CHAT_CONTRACT = """\
-Answer in prose, for a terminal: short paragraphs, no markdown headings, no
-code fences unless you are quoting code.
+You are an in-project coding agent, like Cursor or Claude Code in the IDE.
+The developer may type anything: a question, a rename, a bug fix, a new
+screen, a refactor, a lookup. Every line that is not a slash command is work
+on this project. Look things up, then change the files they asked for.
 
-Ground every claim in the facts and files you were given. When something needed
-to answer properly is missing, say which file or command would establish it -
-the developer can run it. Never invent a version, an API or a file path.
+When you need a lookup, reply with ONLY a JSON object - no prose around it:
 
-When the right answer is "run a command", say which rn-agent command and why,
-in one line, instead of describing what it would do at length.\
+{"tool":"read","path":"ios/Podfile"}
+{"tool":"grep","pattern":"HomeScreen","path":"src"}
+{"tool":"glob","pattern":"src/**/*.tsx"}
+{"tool":"npm","package":"react-native"}
+{"tool":"search","query":"latest React Native version"}
+{"tool":"fetch","url":"https://reactnative.dev/blog"}
+
+When you need to change a file, reply with ONLY JSON. `content` is the entire
+file after the change, not a diff:
+
+{"tool":"rename","from":"src/screen/home/HomeScreen.tsx","to":"src/screen/home/DiscoverScreen.tsx"}
+{"tool":"rename","from":"src/screen/home/HomeScreen.tsx","to":"src/screen/home/DiscoverScreen.tsx","content":"..."}
+{"tool":"write","path":"src/navigation/RootNavigator.tsx","content":"..."}
+{"tool":"delete","path":"src/unused/Old.tsx"}
+{"tool":"write","files":[{"path":"a.tsx","content":"..."},{"path":"b.ts","content":"..."}]}
+
+A rename of a screen is ``rename``, not a second file. That moves the file and
+removes the old path in one step. Put updated component source in ``content``
+when the identifier inside the file also changes. Then ``write`` the files that
+import it. Do not create DiscoverScreen.tsx beside HomeScreen.tsx.
+
+Read a file before you rewrite it. Queue every file the change needs, including
+the old path disappearing, then finish with a short prose summary - no markdown
+headings, no code fences unless you are quoting code. If they only asked a
+question, do not write files.
+
+Use search + fetch for current docs. Use npm for published package versions.
+Do not guess. Ground every claim in what you read. Never invent a version, an
+API or a file path.\
 """
 
 
@@ -346,14 +373,23 @@ def error_fix_messages(
     context: PromptContext,
     report: ValidationReport,
     what_changed: str,
+    instruction: str = "",
 ) -> list[Message]:
+    extra = ""
+    if instruction.strip():
+        extra = (
+            "\n\nThe developer added these instructions. Follow them, still "
+            "fixing the real cause:\n"
+            f"{instruction.strip()}\n"
+        )
     return [
         _system(project, rules, EDIT_CONTRACT),
         Message.user(
             f"{what_changed}\n\n"
             "The project now fails to build. Fix the cause, not the symptom: do not "
             "silence an error, loosen a type, or delete a failing test.\n\n"
-            f"FAILURES:\n```\n{report.failure_text()}\n```\n\n"
+            f"FAILURES:\n```\n{report.failure_text()}\n```"
+            f"{extra}\n"
             f"{_files_block(context)}"
         ),
     ]

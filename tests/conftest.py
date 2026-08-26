@@ -438,16 +438,23 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _isolated_user_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No test may read or write the real user config, keychain or API keys."""
+    """No test may read or write the real user config, keychain, keys or tools."""
     home = tmp_path / "user-home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv(ENV_HOME, str(home))
+    # `HOME` too, not just rn-agent's own override: a managed tool looks for the
+    # vendor's install location (`~/.local/share/...`), so without this the suite
+    # would find whatever the developer happens to have installed and behave
+    # differently on their machine than in CI.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     # The 0600 file backend is the only one that works identically everywhere.
     monkeypatch.setenv(ENV_KEYCHAIN, "file")
     for spec in specs():
         if spec.env_var:
             monkeypatch.delenv(spec.env_var, raising=False)
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.delenv("RN_AGENT_CURSOR_BIN", raising=False)
 
 
 @dataclass

@@ -266,25 +266,47 @@ class ManagedCursorCli:
 
     # -- reporting ---------------------------------------------------------
     def describe(self) -> dict[str, object]:
-        """What `whoami` shows: which binary, and who installed it."""
+        """What `whoami` shows: which binary would run, and who put it there.
+
+        The distinction matters when something misbehaves: a copy on ``PATH``, the
+        one Cursor's own installer left in ``~/.local``, and rn-agent's managed
+        download are three different binaries that can be three different
+        versions. "Somewhere on this machine" is not a useful answer.
+        """
         override = os.environ.get(ENV_BINARY, "").strip()
-        system = self.system_binary()
+        on_path = self._path_binary()
+        vendor = _vendor_install()
         own = self.own_binary()
         if override:
-            source = "RN_AGENT_CURSOR_BIN"
-        elif system is not None:
-            source = "your PATH"
+            binary, source = Path(override).expanduser(), ENV_BINARY
+        elif on_path is not None:
+            binary, source = on_path, "your PATH"
+        elif vendor is not None:
+            binary, source = vendor, "Cursor's own install"
         elif own is not None:
-            source = "managed by rn-agent"
+            binary, source = own, "managed by rn-agent"
         else:
-            source = "not installed"
-        binary = system or own
+            return {
+                "binary": None,
+                "source": "not installed",
+                "managed_versions": [],
+                "managed_root": str(self.root),
+            }
         return {
-            "binary": str(binary) if binary else None,
+            "binary": str(binary),
             "source": source,
             "managed_versions": list(self.installed_versions()),
             "managed_root": str(self.root),
         }
+
+    def _path_binary(self) -> Path | None:
+        """Only what a bare shell would find - no well-known-location fallback."""
+        shell_runner = self.runner or CommandRunner(cwd=Path.cwd())
+        for name in PATH_NAMES:
+            found = shell_runner.which(name)
+            if found:
+                return Path(found)
+        return None
 
 
 def _extract(archive: Path, destination: Path) -> None:

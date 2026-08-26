@@ -103,6 +103,7 @@ def analyse_or_skip(
         lines.append("[warn]no AI connected - /login to enable analysis[/warn]")
     actions = [
         Action("analyze", "Analyze", f"ask {model}" if model else "needs /login"),
+        Action("describe", "Describe a fix", "type what the AI should change"),
         Action("skip", "Skip", "leave it to me"),
     ]
     return choose(

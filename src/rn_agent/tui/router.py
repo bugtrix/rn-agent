@@ -68,6 +68,11 @@ class SlashCommand:
         return self.usage or self.slash
 
 
+#: Write commands that used to typecheck/test after apply. In the TUI they
+#: skip that gate unless the developer passed ``--check`` themselves.
+_FREE_APPLY = frozenset({"fix", "feature", "delegate"})
+
+
 #: Project commands that are simply the CLI, re-entered in-process.
 #: ``(name, summary, group, needs_ai)`` - the flags come from the CLI itself.
 CLI_COMMANDS: tuple[tuple[str, str, str, bool], ...] = (
@@ -75,7 +80,7 @@ CLI_COMMANDS: tuple[tuple[str, str, str, bool], ...] = (
     ("health", "Diagnose React Native, JS, Android and iOS configuration", "Project", False),
     ("compatibility", "Check this project against a React Native version", "Project", False),
     ("review", "Analyse components, hooks, state and performance", "Develop", True),
-    ("fix", "Fix reported problems, then prove the project still builds", "Develop", True),
+    ("fix", "Fix reported problems", "Develop", True),
     ("feature", "Implement a feature following the existing architecture", "Develop", True),
     ("test", "Generate tests for your code and run them", "Develop", True),
     # Not `needs_ai`: this one needs the *Cursor* CLI, not rn-agent's provider,
@@ -198,10 +203,18 @@ class CommandRouter:
 # ---------------------------------------------------------------------------
 def _cli_handler(name: str) -> Callable[[SessionManager, list[str]], RouteResult]:
     def handler(session: SessionManager, args: list[str]) -> RouteResult:
-        code = run_cli(session, [name, *args])
+        code = run_cli(session, [name, *with_free_apply(name, args)])
         return RouteResult(exit_code=code)
 
     return handler
+
+
+def with_free_apply(name: str, args: Sequence[str]) -> list[str]:
+    """Skip post-apply typecheck/tests unless the developer asked for them."""
+    forwarded = list(args)
+    if name in _FREE_APPLY and "--check" not in forwarded and "--no-check" not in forwarded:
+        forwarded.append("--no-check")
+    return forwarded
 
 
 def run_cli(session: SessionManager, argv: Sequence[str]) -> int:

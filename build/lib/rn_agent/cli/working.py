@@ -11,6 +11,7 @@ pipes and CI logs stay byte-stable.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
 import sys
@@ -28,9 +29,25 @@ SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_MS = 80
 SHIMMER_MS = 100
 SHIMMER_WIDTH = 2
+MAX_LABEL = 48
 
 _depth = 0
 _depth_lock = threading.Lock()
+_label = WORKING_WORD
+
+
+def current_label() -> str:
+    """The word currently walking the highlight, for nested waits."""
+    return _label
+
+
+def set_working_label(label: str | None) -> None:
+    """Change the wait word without stacking a second Live line."""
+    global _label
+    text = (label or WORKING_WORD).strip() or WORKING_WORD
+    if len(text) > MAX_LABEL:
+        text = text[: MAX_LABEL - 1] + "…"
+    _label = text
 
 
 def working_enabled() -> bool:
@@ -83,22 +100,34 @@ class _WorkingDisplay:
         now = console.get_time()
         if self._origin is None:
             self._origin = now
-        yield render_working(now - self._origin)
+        yield render_working(now - self._origin, word=current_label())
 
 
 @contextmanager
-def working(*, enabled: bool | None = None, listen_escape: bool | None = None) -> Iterator[None]:
+def working(
+    *,
+    enabled: bool | None = None,
+    listen_escape: bool | None = None,
+    label: str | None = None,
+) -> Iterator[None]:
     """Show the wait animation for the duration of the block.
 
     Nested calls are a no-op so a repair retry does not stack a second line.
     Escape raises ``KeyboardInterrupt`` on a tty; callers already treat that as
-    cancel.
+    cancel. ``label`` is the walking word (``Thinking``, ``Reading Podfile``);
+    nested calls can still change it via :func:`set_working_label`.
     """
     global _depth
+    previous = current_label()
+    if label:
+        set_working_label(label)
     if enabled is None:
         enabled = working_enabled()
     if not enabled:
-        yield
+        try:
+            yield
+        finally:
+            set_working_label(previous)
         return
 
     with _depth_lock:
@@ -108,6 +137,7 @@ def working(*, enabled: bool | None = None, listen_escape: bool | None = None) -
         try:
             yield
         finally:
+            set_working_label(previous)
             with _depth_lock:
                 _depth -= 1
         return
@@ -140,6 +170,7 @@ def working(*, enabled: bool | None = None, listen_escape: bool | None = None) -
         stop.set()
         if watcher is not None:
             watcher.join(timeout=0.4)
+        set_working_label(previous)
         with _depth_lock:
             _depth -= 1
 
@@ -187,25 +218,23 @@ def _watch_escape_posix(stop: threading.Event) -> None:
             _interrupt_main()
             return
     finally:
-        try:
+        with contextlib.suppress(termios.error, OSError):
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        except (termios.error, OSError):
-            pass
 
 
 def _watch_escape_windows(stop: threading.Event) -> None:  # pragma: no cover
-    try:
+    # Guarded by `sys.platform` rather than try/except: that is what tells a type
+    # checker on macOS or Linux that this module only exists on Windows.
+    if sys.platform == "win32":
         import msvcrt
-    except ImportError:
-        return
-    while not stop.wait(0.05):
-        if not msvcrt.kbhit():
-            continue
-        char = msvcrt.getch()
-        if char == b"\x1b":
-            stop.set()
-            _interrupt_main()
-            return
+
+        while not stop.wait(0.05):
+            if not msvcrt.kbhit():
+                continue
+            if msvcrt.getch() == b"\x1b":
+                stop.set()
+                _interrupt_main()
+                return
 
 
 def _interrupt_main() -> None:

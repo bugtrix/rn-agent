@@ -9,9 +9,12 @@ The shape of a safe migration, and why each part is there:
 * **Steps, not a patch.** Each file is applied on its own and marked
   ``applied``/``conflict``/``manual``, so one drifted ``.pbxproj`` does not sink
   the rest of the migration - it becomes a task with the hunk attached.
-* **Proof, then one repair attempt.** Install, typecheck, tests (and builds when
-  asked). If that fails and AI is configured, the failure is handed to the model
-  **once**; if it still fails, everything the agent wrote is rolled back.
+* **Proof, then one repair consent.** Install runs afterwards (unless
+  ``--no-install``). Typecheck, tests and pods are off unless you pass
+  ``--check``: existing TypeScript errors must not undo a version bump. If an
+  opted-in check fails and AI is configured, you confirm once; later rounds
+  reuse that answer. If it still fails, everything the agent wrote is rolled
+  back.
 * **A record either way.** ``.rn-agent/migration-history.json`` keeps the
   attempt, including the failure.
 """
@@ -24,16 +27,14 @@ from pathlib import Path
 from typing import Any
 
 from ..agents.apply import ApplyOutcome
-from ..agents.context_builder import ContextBuilder
-from ..agents.engine import AIEngine
-from ..agents.prompts import error_fix_messages
+from ..agents.repair import MAX_ROUNDS, run_round
 from ..agents.rules import ProjectRules
 from ..agents.workflow import EditWorkflow
 from ..cli import ui
 from ..core.command import AgentCommand
 from ..core.context import AgentContext
 from ..core.registry import register
-from ..errors import ModelOutputError, ProviderError, RNAgentError
+from ..errors import RNAgentError
 from ..migration.diff import HunkResult, apply_hunks, parse_diff, rename_placeholder
 from ..migration.history import record as record_history
 from ..migration.planner import PlanInputs, build_plan
@@ -98,6 +99,7 @@ class MigrateCommand(AgentCommand[MigrateAnalysis, MigratePlan]):
         skip_native: bool = False,
         install: bool = True,
         build: bool = False,
+        checks: tuple[str, ...] = (),
         use_ai: bool = True,
         offline: bool = False,
         allow_dirty: bool = False,
@@ -111,6 +113,7 @@ class MigrateCommand(AgentCommand[MigrateAnalysis, MigratePlan]):
         self.skip_native = skip_native
         self.install = install
         self.build = build
+        self.checks = checks
         self.use_ai = use_ai
         self.offline = offline
         self.allow_dirty = allow_dirty
@@ -444,31 +447,27 @@ class MigrateCommand(AgentCommand[MigrateAnalysis, MigratePlan]):
             return
         from ..validation.runner import ProjectValidator
 
+        steps = self._validation_steps()
+        if not steps:
+            return
         validator = ProjectValidator(self.context)
-        steps: list[str] = []
-        migration = self.context.config.migration
-        if self.install and migration.run_install:
-            steps.append("install")
-        if self.context.project.ios.present and migration.run_pod_install:
-            steps.append("pods")
-        steps.append("typecheck")
-        if migration.run_tests:
-            steps.append("tests")
-        if self.build:
-            if migration.run_android_build and self.context.project.android.present:
-                steps.append("android")
-            if migration.run_ios_build and self.context.project.ios.present:
-                steps.append("ios")
 
         report = validator.run(steps)
         self.validation = report
+        rounds = 0
+        while not report.ok:
+            if self.context.assume_yes and rounds > 0:
+                break
+            if rounds >= MAX_ROUNDS:
+                break
+            if not self._repair(plan, report):
+                break
+            rounds += 1
+            self.ai_fixes = rounds
+            report = validator.run(steps)
+            self.validation = report
         if report.ok:
             return
-
-        if self._repair(plan, report):
-            self.validation = validator.run(steps)
-            if self.validation.ok:
-                return
 
         restored = plan.workflow.applier.rollback()
         plan.workflow.rolled_back = bool(restored)
@@ -478,60 +477,50 @@ class MigrateCommand(AgentCommand[MigrateAnalysis, MigratePlan]):
                 step.reason = "rolled back: the project did not build after the migration"
         self.logger.warning("migration rolled back (%s file(s) restored)", len(restored))
 
+    def _validation_steps(self) -> list[str]:
+        """Install after a bump; typecheck/tests/pods only when ``--check`` asked.
+
+        Demo apps often fail ``tsc`` on errors that predate the migration. Those
+        must not print as a migrate failure or undo the version bump.
+        """
+        from ..validation.runner import STEP_NAMES
+
+        migration = self.context.config.migration
+        steps: list[str] = []
+        if self.install and migration.run_install:
+            steps.append("install")
+        extra = set(self.checks)
+        if "pods" in extra and self.context.project.ios.present and migration.run_pod_install:
+            steps.append("pods")
+        if "typecheck" in extra:
+            steps.append("typecheck")
+        if "lint" in extra:
+            steps.append("lint")
+        if "tests" in extra and migration.run_tests:
+            steps.append("tests")
+        if self.build:
+            if migration.run_android_build and self.context.project.android.present:
+                steps.append("android")
+            if migration.run_ios_build and self.context.project.ios.present:
+                steps.append("ios")
+        return [name for name in STEP_NAMES if name in steps]
+
     def _repair(self, plan: MigratePlan, report: ValidationReport) -> bool:
         """One AI repair round. Returns whether anything was applied."""
         migration = self.context.config.migration
         if not (self.use_ai and migration.use_ai_for_errors):
             return False
-        if not self.context.ai_ready():
-            self.logger.info("no AI configured; skipping the repair round")
-            return False
-
-        failing = [step.name for step in report.failures]
-        # Consent before spending the developer's own account. The command line
-        # answers this with `--yes`/`--no-ai`; the interactive terminal turns it
-        # into the "[Analyze] [Skip]" dialog, which is the same decision.
-        model = self.context.config.ai.model_for("migration") or "the configured model"
-        if not self.context.safety.confirm(
-            f"{', '.join(failing)} failed. Analyse the failure with {model}?",
-            default=True,
-        ):
-            self.logger.info("repair round declined")
-            return False
-        self.logger.info("asking the model to fix: %s", ", ".join(failing))
-        selected = ContextBuilder(self.context).select(
-            paths=tuple(self._applied) or (),
-            query=" ".join(failing),
-        )
-        try:
-            engine = AIEngine(self.context)
-            proposals = engine.propose(
-                error_fix_messages(
-                    project=self.context.project,
-                    rules=ProjectRules.load(self.context.paths),
-                    context=selected,
-                    report=report,
-                    what_changed=(
-                        f"react-native {plan.plan.from_version} -> {plan.plan.to_version} "
-                        "was just applied to this project"
-                    ),
-                ),
-                task="migration",
-            )
-        except (ProviderError, ModelOutputError) as error:
-            self.logger.warning("the repair round did not produce a fix: %s", error.message)
-            return False
-
-        kept, _ = plan.workflow.screen(proposals.proposals)
-        if not kept:
-            return False
-        repair = plan.workflow.apply(
-            kept,
+        return run_round(
+            plan.workflow,
+            report,
+            what_changed=(
+                f"react-native {plan.plan.from_version} -> {plan.plan.to_version} "
+                "was just applied to this project"
+            ),
+            paths=self._applied,
+            task="migration",
             reason="migrate: repair build errors",
-            question=f"Apply {sum(len(p.usable_edits) for p in kept)} repair change(s)?",
         )
-        self.ai_fixes = 1 if repair.wrote_anything else 0
-        return repair.wrote_anything
 
     def _newest(self, registry: NpmRegistry | None) -> str | None:
         if registry is None:

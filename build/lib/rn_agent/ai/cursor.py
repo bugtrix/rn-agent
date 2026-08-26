@@ -8,11 +8,13 @@ automation contract (``-p --output-format json``).
 
 Two deliberate choices, both about staying inside rn-agent's safety envelope:
 
-* **``--mode ask``, ``--trust``, and never ``--force``.** Print mode has access
-  to write and shell tools, and ``--force`` / ``--yolo`` auto-approve them. Ask
-  mode plus no ``--force`` means the agent answers instead of editing.
-  ``--trust`` only skips Cursor's workspace-trust prompt, which a headless CLI
-  cannot answer. ``rn-agent delegate`` is the opt-in for letting Cursor edit.
+* **No ``--mode``, ``--trust``, and never ``--force``.** This CLI's ``--mode``
+  only accepts ``ask`` and ``plan``. ``ask`` is why it answers "I'm in Ask mode"
+  and refuses file-change JSON. Omitting ``--mode`` is the coding agent (there
+  is no ``--mode agent``). Print mode has write and shell tools, and
+  ``--force`` / ``--yolo`` auto-approve them - so those flags stay off.
+  ``--trust`` only skips Cursor's workspace-trust prompt. ``rn-agent delegate``
+  is the opt-in for letting Cursor edit the tree itself.
 * **No SDK dependency.** ``cursor-sdk`` on PyPI is official but ships a bundled
   bridge binary (~50-60 MB per wheel, proprietary, public beta) and wraps the
   same documented CLI and REST surface. rn-agent ships an npm wrapper with a
@@ -35,18 +37,28 @@ from ..net.http import DEFAULT_TIMEOUT, HttpResponse
 from ..runner.command_runner import CommandRunner
 from ..tools.cursor import MISSING_HINT, resolve_binary
 from .provider import AIProvider, ProviderIdentity
-from .types import Completion, Message, Usage
+from .types import Completion, Message
 
-#: Long prompts go on argv, and argv has a kernel limit (``ARG_MAX``). Refusing
-#: with a number is better than an ``E2BIG`` nobody can read: rn-agent's own
-#: context budget is the thing to turn down.
-MAX_PROMPT_CHARS = 120_000
 #: Shared ``ai.timeout_seconds`` is sized for one HTTP call. Cursor is a local
 #: agent and routinely needs several minutes.
 AGENT_TIMEOUT = 600.0
 
 DOCS = "https://cursor.com/docs/cli/headless"
 KEYS_URL = "https://cursor.com/dashboard?tab=integrations"
+#: This CLI's ``--mode`` only accepts ``ask`` and ``plan``. Anything else,
+#: including the word "agent", must be omitted so the coding agent runs.
+CLI_MODES = frozenset({"ask", "plan"})
+
+#: Cursor's own Ask mode refuses to propose file writes. This block sits in
+#: every prompt so the CLI does not tell the developer to "switch to Agent mode".
+HOST_CONTRACT = """\
+You are the model for rn-agent, not Cursor Ask mode. The host applies every
+file change after you reply. The developer may type any prompt, like an IDE.
+Use the host JSON tools (read, grep, glob, npm, search, fetch, write, delete,
+rename) or a short prose answer. To rename a screen, use rename (from + to),
+not a second file. Do not use Cursor's own Write or Shell tools. Do not say
+you are in Ask mode. Do not tell the developer to switch modes.\
+"""
 
 
 class CursorProvider(AIProvider):
@@ -70,7 +82,7 @@ class CursorProvider(AIProvider):
         self,
         *,
         runner: CommandRunner | None = None,
-        mode: str = "ask",
+        mode: str | None = None,
         workspace: str | None = None,
         binary: str | None = None,
         **extra: Any,
@@ -82,7 +94,7 @@ class CursorProvider(AIProvider):
         super().__init__(transport=_NoTransport(), **extra)
         if self.timeout < AGENT_TIMEOUT:
             self.timeout = AGENT_TIMEOUT
-        self.mode = mode
+        self.mode = _cli_mode(mode)
         self.workspace = workspace
         self._binary = Path(binary).expanduser() if binary else None
         # The agent reads the repository it is standing in, so the workspace is
@@ -123,27 +135,19 @@ class CursorProvider(AIProvider):
         The CLI takes a single prompt string, not a message array, so roles are
         rendered as labelled blocks. ``max_output_tokens`` and ``temperature``
         have no CLI equivalent and are deliberately dropped rather than faked.
+
+        There is no length limit here: the prompt is written to the CLI's stdin,
+        not passed as an argument, so ``ARG_MAX`` never enters into it.
         """
         _ = max_output_tokens, temperature
         system_text, chat = self._split_system(messages, system)
-        blocks: list[str] = []
+        blocks: list[str] = [HOST_CONTRACT]
         if system_text:
             blocks.append(system_text)
         for message in chat:
             label = "Developer" if message.role == "user" else "Assistant"
             blocks.append(f"[{label}]\n{message.content}")
-        prompt = "\n\n".join(blocks)
-        if len(prompt) > MAX_PROMPT_CHARS:
-            raise ProviderError(
-                f"prompt is {len(prompt)} characters; the Cursor CLI takes it as an "
-                f"argument and the limit here is {MAX_PROMPT_CHARS}",
-                hint=(
-                    "Lower ai.max_context_files or ai.max_context_tokens, or pass "
-                    "fewer --files. Cursor reads the repository itself, so it needs "
-                    "less context than an API provider."
-                ),
-            )
-        return {"prompt": prompt, "model": model}
+        return {"prompt": "\n\n".join(blocks), "model": model}
 
     def _parse_completion(
         self, body: Mapping[str, Any], *, model: str, task: str | None
@@ -159,9 +163,9 @@ class CursorProvider(AIProvider):
             text=text,
             provider=self.name,
             model=_reported_model(body) or model,
-            # The CLI reports duration, not tokens. Reporting zero is honest;
-            # inventing a count would corrupt `/status` accounting.
-            usage=Usage(input_tokens=0, output_tokens=0),
+            # The CLI reports real token counts (camelCase, nested under
+            # `usage`), so `/status` accounting is exact rather than blank.
+            usage=self._usage(body, input_key="inputTokens", output_key="outputTokens"),
             stop_reason="error" if body.get("is_error") else None,
             task=task,
         )
@@ -180,7 +184,7 @@ class CursorProvider(AIProvider):
         """
         _ = method, path
         prompt = str((payload or {}).get("prompt") or "")
-        model = str((payload or {}).get("model") or "")
+        model = cli_model_id(str((payload or {}).get("model") or ""))
         argv = [self.executable(), "--print", "--output-format", "json", "--trust"]
         if self.mode:
             argv += ["--mode", self.mode]
@@ -188,12 +192,15 @@ class CursorProvider(AIProvider):
             argv += ["--model", model]
         if self.workspace:
             argv += ["--workspace", self.workspace]
-        argv.append(prompt)
-
+        # The prompt goes on stdin, not argv. rn-agent's context budget can build
+        # a prompt of a hundred thousand characters or more, and while ARG_MAX is
+        # usually 1 MiB it is a platform limit with the environment counted
+        # against it - stdin has no such ceiling and the CLI reads it happily.
         result = self._runner.run(
             argv,
             timeout=self.timeout,
             env=self._env(),
+            input_text=prompt,
             # A completion is a read. Dry-run must not turn it into a no-op that
             # looks like an empty answer from the model.
             force=True,
@@ -217,16 +224,35 @@ class CursorProvider(AIProvider):
         return response
 
     def _failure(self, response: HttpResponse) -> ProviderError:
-        """Keep workspace-trust distinct from a real Cursor outage."""
-        detail = (self._error_message(response) or "").casefold()
+        """Keep workspace-trust and a rejected model distinct from a real outage."""
+        detail = (self._error_message(response) or "").strip()
+        folded = detail.casefold()
         text = (response.text or "").casefold()
-        if "trust" in detail or "trust" in text:
+        if "trust" in folded or "trust" in text:
             return ProviderError(
                 "the Cursor CLI needs workspace trust for this project",
                 hint=(
                     "Headless runs pass --trust so this prompt is skipped. "
                     "Retry with this build. --yolo / --force are not used here; "
                     "they auto-approve writes."
+                ),
+            )
+        if "cannot use this model" in folded:
+            asked = detail.split(":", 1)[-1].split("Available", 1)[0].strip().rstrip(".")
+            return ProviderError(
+                f"Cursor rejected this model: {asked or 'unknown'}",
+                hint=(
+                    "Cursor wants a model id, not the pretty name. "
+                    "Run `/model composer-2.5` or pick again from `/model` "
+                    "(the id is the token before ' - ')."
+                ),
+            )
+        if "invalid" in folded and ("--mode" in folded or "allowed choices" in folded):
+            return ProviderError(
+                "the Cursor CLI rejected --mode",
+                hint=(
+                    "This CLI only accepts --mode ask or --mode plan. "
+                    "The coding agent is the default: omit --mode."
                 ),
             )
         return super()._failure(response)
@@ -272,6 +298,19 @@ class CursorProvider(AIProvider):
         if self._credential:
             detail = f"{detail} (CURSOR_API_KEY in use)"
         return ProviderIdentity(provider=self.name, ok=True, detail=detail, models=models)
+
+
+def _cli_mode(raw: str | None) -> str | None:
+    """``ask`` / ``plan``, or ``None`` so the coding agent runs.
+
+    Passing ``agent`` is a CLI error: allowed choices are only ask and plan.
+    """
+    if not raw:
+        return None
+    folded = raw.strip().casefold()
+    if folded in CLI_MODES:
+        return folded
+    return None
 
 
 class _NoTransport:
@@ -363,7 +402,12 @@ def _account(stdout: str) -> str:
 
 
 def _model_names(stdout: str) -> tuple[str, ...]:
-    """Model ids from either a JSON array/object or one-per-line text."""
+    """Model ids from either a JSON array/object or one-per-line text.
+
+    Cursor's human listing is ``id - Pretty Name``. Only the id is valid for
+    ``--model``; keeping the label made `/model` persist a string the CLI
+    then rejected.
+    """
     text = stdout.strip()
     if not text:
         return ()
@@ -377,17 +421,33 @@ def _model_names(stdout: str) -> tuple[str, ...]:
         names = []
         for entry in parsed:
             if isinstance(entry, str) and entry:
-                names.append(entry)
+                names.append(cli_model_id(entry))
             elif isinstance(entry, Mapping):
                 value = entry.get("id") or entry.get("name")
                 if isinstance(value, str) and value:
-                    names.append(value)
-        return tuple(names)
+                    names.append(cli_model_id(value))
+        return tuple(name for name in names if name)
     return tuple(
-        line.strip().lstrip("*- ").strip()
+        cli_model_id(line)
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith(("Available", "Models"))
     )
+
+
+def cli_model_id(raw: str) -> str:
+    """The token Cursor accepts as ``--model``.
+
+    ``claude-opus-5-thinking-high - Claude Opus 5 1M Thinking`` is a listing
+    line. The CLI only accepts the slug on the left.
+    """
+    text = raw.strip().lstrip("*-• ").strip()
+    if " - " not in text:
+        return text
+    slug, _, pretty = text.partition(" - ")
+    slug = slug.strip()
+    if slug and " " not in slug and pretty.strip():
+        return slug
+    return text
 
 
 def preferred_model(models: Sequence[str]) -> str | None:

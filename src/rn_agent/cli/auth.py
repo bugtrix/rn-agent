@@ -109,6 +109,8 @@ def _render_status(status: session.AuthStatus) -> None:
     ]
     if status.stored:
         rows.append(("stored keys", ", ".join(status.stored)))
+    if status.tool_source == "not installed":
+        rows.append(("cli", "not installed - `rn-agent login cursor` installs it"))
     if status.task_models:
         rows.append(
             ("task models", ", ".join(f"{task}={model}" for task, model in sorted(status.task_models.items())))
@@ -118,6 +120,11 @@ def _render_status(status: session.AuthStatus) -> None:
     if status.verified is not None:
         rows.append(("verified", status.detail or ("yes" if status.verified else "no")))
     ui.key_values(rows)
+    if status.tool_binary:
+        # A path that Rich wrapped mid-token is not a path you can paste. Three
+        # places a Cursor CLI can come from, so name which one is in play.
+        ui.field("cli", status.tool_source or "-")
+        ui.code(status.tool_binary, indent=21)
     if status.backend_location and status.has_credential and not status.from_env:
         ui.blank()
         ui.warning(

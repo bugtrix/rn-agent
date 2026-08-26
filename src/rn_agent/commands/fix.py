@@ -1,9 +1,9 @@
 """``rn-agent fix`` - repair what ``health`` or ``review`` reported.
 
-The interesting part is not the model call, it is the order of operations:
-apply, then prove, then undo if the proof failed. That is only safe because
-every write went through ``FileManager`` with a backup, so ``rollback()``
-restores the previous bytes exactly.
+The interesting part is not the model call, it is that every write went through
+``FileManager`` with a backup. Validation is opt-in (``--check``): a failed
+proof can undo the change, which is only safe because ``rollback()`` restores
+the previous bytes exactly.
 
 ``--issue <id>`` reads the finding out of the knowledge store, which is what
 makes the commands one agent: ``health`` recorded the id, ``fix`` acts on it,
@@ -81,7 +81,7 @@ class FixPlan:
 
 class FixCommand(AgentCommand[FixAnalysis, FixPlan]):
     name = "fix"
-    description = "Fix reported problems, then prove the project still builds"
+    description = "Fix reported problems"
     read_only = False
     requires_context = True
 
@@ -93,7 +93,7 @@ class FixCommand(AgentCommand[FixAnalysis, FixPlan]):
         files: tuple[str, ...] = (),
         instruction: str | None = None,
         changed: bool = False,
-        checks: tuple[str, ...] = ("typecheck", "tests"),
+        checks: tuple[str, ...] = (),
         allow_native: bool = False,
         allow_dependencies: bool = False,
         keep_on_failure: bool = False,
@@ -313,7 +313,7 @@ class FixCommand(AgentCommand[FixAnalysis, FixPlan]):
             ui.note("re-run with --keep to inspect the failing change")
             return
         if self.validation is not None and not self.validation.ok:
-            ui.failure("validation failed; the changes were kept (--keep)")
+            ui.failure("validation failed; the changes were kept")
             return
         if self.report.applied:
             proof = "validated" if self.validation is not None else "not validated"

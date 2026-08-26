@@ -11,6 +11,7 @@ select a disconnected model, a slash command that quietly reimplements the CLI.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -19,9 +20,11 @@ from rn_agent.ai.models import ModelInfo, ModelRegistry, ModelSource
 from rn_agent.auth.authenticator import AuthMethod
 from rn_agent.auth.manager import AuthenticationManager
 from rn_agent.tui import chrome, handlers
-from rn_agent.tui.dialogs import Action, choose
+from rn_agent.tui.agent import answer, slash_invocation
+from rn_agent.tui.chrome import status_plain, toolbar_fragments
+from rn_agent.tui.dialogs import Action, analyse_or_skip, choose
 from rn_agent.tui.palette import open_palette
-from rn_agent.tui.router import CommandRouter, parse_flags
+from rn_agent.tui.router import CommandRouter, RouteResult, parse_flags
 from rn_agent.tui.select import Choice, Selector, fuzzy_rank, select
 from rn_agent.tui.session import SessionManager
 from rn_agent.tui.wizard import migrate as run_wizard
@@ -373,10 +376,29 @@ def test_login_to_an_api_key_provider_stores_and_connects(project, tmp_path):
 
 
 def test_login_cursor_session_does_not_ask_for_a_key(project, tmp_path, monkeypatch):
-    """A pipe has no browser: the session path must not spawn `cursor-agent login`."""
+    """A pipe has no browser: the session path must not spawn `cursor-agent login`.
+
+    With no CLI on the machine it also must not claim to be connected - it says
+    what to run instead, and names the install rather than "not connected".
+    """
     monkeypatch.setattr(
         "rn_agent.tools.cursor.run_sign_in",
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not spawn login")),
+    )
+    session = build_session(project, tmp_path, connect=None)
+
+    result = handlers.login(session, ["cursor"], picker=picker_for("session"))
+
+    assert result.exit_code == 10
+    assert "not installed" in (result.warning or "")
+    assert "/login cursor" in (result.warning or "")
+
+
+def test_login_cursor_connects_when_the_cli_is_there(project, tmp_path, monkeypatch):
+    """Present on the machine is what "connected" means for a tool session."""
+    monkeypatch.setattr("rn_agent.tools.cursor.resolve_binary", lambda **_: Path("/tmp/cursor-agent"))
+    monkeypatch.setattr(
+        "rn_agent.auth.manager.resolve_binary", lambda **_: Path("/tmp/cursor-agent"), raising=False
     )
     session = build_session(project, tmp_path, connect=None)
 
@@ -647,6 +669,158 @@ def test_upgrade_can_bump_javascript_dependencies_instead(project, tmp_path):
 )
 def test_prose_routes_deterministically(text, expected):
     assert detect(text).intent is expected
+
+
+def test_toolbar_is_the_status_line(project, tmp_path):
+    session = build_session(project, tmp_path)
+    fragments = toolbar_fragments(session.snapshot())
+    plain = "".join(text for _, text in fragments)
+
+    assert plain == status_plain(session.snapshot())
+    assert "─" not in plain
+    assert "RN" in plain
+
+
+def test_help_mentions_the_free_prompt(project, tmp_path, capsys):
+    from rn_agent.tui.chrome import help_hint, render_help
+
+    assert "Type any prompt" in help_hint()
+    render_help([("/fix", "Fix reported problems")])
+    out = capsys.readouterr().out
+    assert "like an IDE" in out
+    assert "/fix" in out
+    assert "--check" in out
+
+
+def test_tui_skips_post_apply_checks_unless_asked():
+    from rn_agent.tui.router import with_free_apply
+
+    assert with_free_apply("fix", ["--about", "the button"]) == [
+        "--about",
+        "the button",
+        "--no-check",
+    ]
+    assert with_free_apply("feature", ["add a screen"])[-1] == "--no-check"
+    assert with_free_apply("delegate", ["tidy the header"])[-1] == "--no-check"
+    assert with_free_apply("fix", ["--check", "typecheck"]) == ["--check", "typecheck"]
+    assert with_free_apply("scan", []) == []
+
+
+def test_a_pod_error_is_answered_instead_of_offering_a_command(project, tmp_path, monkeypatch):
+    session = build_session(project, tmp_path)
+    router = CommandRouter(session=session)
+    monkeypatch.setattr(
+        "rn_agent.tui.agent.choose",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("chat must not open a dialog")
+        ),
+    )
+    monkeypatch.setattr(
+        "rn_agent.tui.agent._converse",
+        lambda session, router, text: RouteResult(message=text),
+    )
+
+    result = answer(session, router, "pod install fails with RNFirebase SPM duplicate symbols")
+
+    assert result.message.startswith("pod install")
+
+
+def test_a_prompt_applies_the_files_it_queued(project, tmp_path, monkeypatch):
+    from rn_agent.ai.types import Completion, Usage
+    from rn_agent.tui.router import CommandRouter
+
+    session = build_session(project, tmp_path)
+    target = "src/screens/Hello.tsx"
+    body = "export const Hello = () => null;\n"
+
+    class Provider:
+        def complete(self, messages, **kwargs):
+            if not getattr(self, "sent", False):
+                self.sent = True
+                return Completion(
+                    text=(
+                        '{"tool":"write","path":"'
+                        + target
+                        + '","content":'
+                        + json.dumps(body)
+                        + "}"
+                    ),
+                    provider="test",
+                    model="test",
+                    usage=Usage(),
+                )
+            return Completion(
+                text="Created Hello screen.",
+                provider="test",
+                model="test",
+                usage=Usage(),
+            )
+
+    session._provider_cache = Provider()
+    monkeypatch.setattr("rn_agent.tui.agent.ui.working", _noop_working)
+    router = CommandRouter(session=session)
+
+    result = answer(session, router, "create a Hello screen")
+
+    assert result.exit_code == 0
+    assert (project.root / target).read_text() == body
+
+
+def test_a_question_does_not_write_files(project, tmp_path, monkeypatch):
+    from rn_agent.ai.types import Completion, Usage
+    from rn_agent.tui.router import CommandRouter
+
+    session = build_session(project, tmp_path)
+    before = (project.root / "package.json").read_text()
+
+    class Provider:
+        def complete(self, messages, **kwargs):
+            return Completion(
+                text="This project is on React Native 0.81.",
+                provider="test",
+                model="test",
+                usage=Usage(),
+            )
+
+    session._provider_cache = Provider()
+    monkeypatch.setattr("rn_agent.tui.agent.ui.working", _noop_working)
+    router = CommandRouter(session=session)
+
+    answer(session, router, "what version of React Native is this?")
+
+    assert (project.root / "package.json").read_text() == before
+
+
+def _noop_working(*, label=None):
+    from contextlib import nullcontext
+
+    return nullcontext()
+
+
+def test_slash_invocation_keeps_spaces_in_about(project, tmp_path):
+    session = build_session(project, tmp_path)
+    line = slash_invocation(
+        "fix", about="typecheck failed: Permission is not assignable to string"
+    )
+    name, args = CommandRouter(session=session).split(line)
+
+    assert name == "fix"
+    assert args == ["--about", "typecheck failed: Permission is not assignable to string"]
+
+
+def test_analyse_or_skip_offers_a_typed_fix():
+    picker = picker_for("describe")
+
+    result = analyse_or_skip(
+        title="typecheck failed",
+        detail="error TS2322",
+        provider="cursor",
+        model="cursor-grok-4.6-high-fast",
+        picker=picker,
+    )
+
+    assert result == "describe"
+    assert "Describe a fix" in [choice.label for choice in picker.seen["choices"]]
 
 
 def test_a_migration_request_carries_its_target():

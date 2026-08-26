@@ -43,7 +43,7 @@ from .palette import open_palette
 from .router import CommandRouter, RouteResult
 from .select import select
 from .session import SessionManager
-from .theme import colors_enabled, interactive_terminal
+from .theme import colors_enabled, interactive_terminal, selector_style
 
 HISTORY_FILE = "history"
 
@@ -110,7 +110,14 @@ class Terminal:
 
     def _read(self) -> str | None:
         prompt = self._session_prompt()
-        return prompt.prompt(FormattedText([("class:prompt.arrow", "\n> ")]))
+        return prompt.prompt(
+            FormattedText([("class:prompt.arrow", "\n> ")]),
+            placeholder="Type any prompt — rename, fix, add a screen, or ask",
+            bottom_toolbar=self._toolbar,
+        )
+
+    def _toolbar(self) -> Any:
+        return chrome.toolbar_fragments(self.session.snapshot())
 
     def _handle(self, text: str) -> RouteResult:
         try:
@@ -147,6 +154,7 @@ class Terminal:
                 complete_while_typing=True,
                 key_bindings=self._bindings(),
                 enable_history_search=True,
+                style=selector_style(),
             )
         return self._prompt
 

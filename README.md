@@ -509,6 +509,46 @@ A stored key takes precedence over the CLI's session and is reported as the key
 it is. `rn-agent logout cursor` forgets **that key only** — Cursor's own session
 is not rn-agent's to revoke, and `cursor-agent logout` is what ends it.
 
+#### The Cursor CLI is a managed runtime
+
+You never install, place on `PATH` or update it yourself — the same bargain the
+npm wrapper makes for its private Python runtime.
+
+```
+~/.config/rn-agent/tools/cursor-agent/<version>/cursor-agent
+```
+
+rn-agent reads the version out of Cursor's own installer script, downloads the
+same versioned artefact that script would download, and unpacks it there. What it
+**never** does: pipe an install script into a shell, write to `~/.local/bin` or
+any directory on your `PATH`, or edit `~/.zshrc`, `~/.bashrc` or any profile. The
+binary is invoked by absolute path.
+
+**An install you already have wins.** `PATH` first, then Cursor's own location
+(`~/.local/bin`, `~/.local/share/cursor-agent/...` — frequently *not* on `PATH`,
+since Cursor's docs end by telling you to add it), then rn-agent's managed copy.
+75 MB is not worth downloading twice. `rn-agent whoami` names which one is in
+play, because three copies can be three versions:
+
+```
+  cli                Cursor's own install
+                     ~/.local/share/cursor-agent/versions/2026.08.11-e8db854/cursor-agent
+```
+
+Two honest caveats:
+
+* **Cursor publishes no checksum** for these artefacts, so there is none to
+  verify. HTTPS to Cursor's own CDN and a pinned, recorded version is the whole
+  of the guarantee. The archive is still unpacked as untrusted input — absolute
+  paths, `..` traversal and symlinks out of the tree are refused.
+* **The Cursor binary self-updates.** Running it may create `~/.local/bin`
+  symlinks and its own version directory. rn-agent does not do that; Cursor does,
+  and it is not something this agent can switch off. The upside is that the copy
+  it leaves is then found by the lookup above instead of being duplicated.
+
+`RN_AGENT_CURSOR_BIN=/path/to/cursor-agent` uses a binary rn-agent did not
+install; `RN_AGENT_CURSOR_VERSION` pins the version for an air-gapped CI.
+
 ### Giving it a key
 
 ```bash
@@ -938,7 +978,10 @@ src/rn_agent/
 ├── ai/             AIProvider + Anthropic/OpenAI/Google/Vertex/Cursor/Ollama
 ├── auth/           Authenticator (OAuth / API key / local / tool session),
 │                   keychain backends, PKCE loopback + device grant, stores
-├── net/            the one HTTP seam (JsonTransport) for every subsystem
+├── net/            the one HTTP seam: JsonTransport for JSON, a streaming
+│                   downloader for artefacts
+├── tools/          external CLIs rn-agent installs and manages for you, never
+│                   on your PATH and never in your shell profile
 ├── validation/     ProjectValidator: install, pods, tsc, eslint, tests, builds
 ├── upgrade/        npm registry client + deterministic upgrade planner
 ├── migration/      diff sources, strict diff engine, local rules, planner, history
@@ -1071,7 +1114,7 @@ cd rn-agent
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                 # 762 tests
+pytest                 # 866 tests
 ruff check src tests   # lint
 mypy                   # types
 ```
@@ -1098,7 +1141,7 @@ pytest tests/test_health.py     # one area
 pytest -k semver                # one topic
 ```
 
-762 tests covering project detection, RN/React/Node version resolution, package
+866 tests covering project detection, RN/React/Node version resolution, package
 manager detection, lockfile disambiguation, architecture inference, Gradle `ext`
 indirection, Podfile/pbxproj/plist parsing, every health rule (fires *and* stays
 silent), health scoring, git safety, file backup/rollback/traversal refusal,

@@ -26,6 +26,13 @@ def test_working_line_highlights_ng_at_point_six_seconds():
     assert highlighted == "ng"
 
 
+def test_working_line_uses_a_custom_label():
+    line = render_working(0, word="Thinking")
+
+    assert "Thinking" in line.plain
+    assert "[esc]" in line.plain
+
+
 def test_working_can_omit_the_esc_hint():
     assert "[esc]" not in render_working(0, esc=False).plain
 
@@ -38,9 +45,8 @@ def test_working_is_a_noop_when_disabled():
 
 
 def test_nested_working_does_not_raise():
-    with working(enabled=False):
-        with working(enabled=False):
-            pass
+    with working(enabled=False), working(enabled=False):
+        pass
 
 
 def test_pytest_disables_the_animation():

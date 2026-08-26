@@ -16,10 +16,13 @@ src/rn_agent/agents/apply.py
 src/rn_agent/agents/context_builder.py
 src/rn_agent/agents/cursor_agent.py
 src/rn_agent/agents/engine.py
+src/rn_agent/agents/inspect.py
 src/rn_agent/agents/intent.py
 src/rn_agent/agents/output.py
 src/rn_agent/agents/prompts.py
+src/rn_agent/agents/repair.py
 src/rn_agent/agents/rules.py
+src/rn_agent/agents/web.py
 src/rn_agent/agents/workflow.py
 src/rn_agent/ai/__init__.py
 src/rn_agent/ai/anthropic.py
@@ -165,6 +168,7 @@ tests/test_feature.py
 tests/test_fix.py
 tests/test_google_provider.py
 tests/test_health.py
+tests/test_inspect.py
 tests/test_managers.py
 tests/test_migrate.py
 tests/test_model_registry.py
@@ -177,4 +181,5 @@ tests/test_tui.py
 tests/test_upgrade.py
 tests/test_validation.py
 tests/test_vertex.py
+tests/test_web.py
 tests/test_working.py

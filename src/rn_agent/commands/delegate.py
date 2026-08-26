@@ -77,7 +77,7 @@ class DelegatePlan:
 
 class DelegateCommand(AgentCommand[DelegateAnalysis, DelegatePlan]):
     name = "delegate"
-    description = "Hand a task to the Cursor agent, then audit and validate what it changed"
+    description = "Hand a task to the Cursor agent, then audit what it changed"
     read_only = False
     requires_context = True
 
@@ -87,7 +87,7 @@ class DelegateCommand(AgentCommand[DelegateAnalysis, DelegatePlan]):
         *,
         task: str | None = None,
         model: str | None = None,
-        checks: tuple[str, ...] = ("typecheck", "tests"),
+        checks: tuple[str, ...] = (),
         allow_native: bool = False,
         allow_dependencies: bool = False,
         allow_dirty: bool = False,

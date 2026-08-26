@@ -114,6 +114,8 @@ class EditApplier:
         *,
         reason: str,
         question: str | None = None,
+        confirmed: bool = False,
+        confirm_default: bool = False,
     ) -> ApplyOutcome:
         """Screen, ask, write. Raises ``ConfirmationDeclined`` if refused."""
         allowed, violations = self.screen(edits)
@@ -128,13 +130,14 @@ class EditApplier:
         )
         if decision.blocked:
             raise ConfirmationDeclined(decision.reason)
-        if decision.requires_confirmation:
+        if decision.requires_confirmation and not confirmed:
             prompt = question or f"Apply {len(paths)} file change(s) (risk: {risk.value})?"
-            agent.safety.require(prompt, default=False)
+            agent.safety.require(prompt, default=confirm_default)
 
         applied: list[str] = []
         unchanged: list[str] = []
-        for edit in allowed:
+        ordered = sorted(allowed, key=lambda edit: edit.action is EditAction.DELETE)
+        for edit in ordered:
             change = self._write(edit, reason=reason, risk=risk)
             if change is None:
                 continue

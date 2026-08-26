@@ -117,6 +117,17 @@ def login(session: SessionManager, args: list[str], *, picker: Picker = select) 
         ui.success(f"{entry.label} connected{detail} · auth: {state.method.label}")
         ui.note("run /model to choose a model, or /switch to change provider or model")
         return RouteResult()
+    if capability.method is AuthMethod.TOOL:
+        from ..tools.cursor import resolve_binary
+
+        if resolve_binary() is None:
+            return RouteResult(
+                exit_code=10,
+                warning=(
+                    f"{entry.label} is not installed yet - run `/login {entry.provider}` "
+                    "in a terminal and rn-agent will install it and open the sign-in page"
+                ),
+            )
     return RouteResult(exit_code=10, warning=f"{entry.label} is still not connected")
 
 
@@ -628,7 +639,7 @@ def session_commands(*, picker: Picker = select, router: Any = None) -> dict[str
     entries = [
         SlashCommand(
             name="help",
-            summary="List every command",
+            summary="How to use the prompt, and every slash command",
             handler=bind(help_command, router=router),
             group="Session",
             aliases=("?",),

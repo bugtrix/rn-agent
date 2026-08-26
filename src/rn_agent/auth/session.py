@@ -48,6 +48,11 @@ class AuthStatus:
     backend_location: str | None = None
     verified: bool | None = None
     detail: str | None = None
+    #: For a provider that is a local tool: which binary would run, and whether
+    #: rn-agent installed it. A developer debugging "which Cursor is this?"
+    #: should not have to guess between PATH, ~/.local and our managed copy.
+    tool_binary: str | None = None
+    tool_source: str | None = None
 
     @property
     def has_credential(self) -> bool:
@@ -82,6 +87,8 @@ class AuthStatus:
             "ready": self.ready,
             "verified": self.verified,
             "detail": self.detail,
+            "tool_binary": self.tool_binary,
+            "tool_source": self.tool_source,
         }
 
 
@@ -173,6 +180,18 @@ def status(
         except ProviderError as error:
             verified, detail = False, error.message
 
+    tool_binary: str | None = None
+    tool_source: str | None = None
+    if spec.name == "cursor":
+        # Which of the three possible binaries would actually run. Cheap: a PATH
+        # and directory lookup, no subprocess, so `whoami` stays instant.
+        from ..tools.cursor import cursor_cli
+
+        described = cursor_cli().describe()
+        binary, source = described.get("binary"), described.get("source")
+        tool_binary = str(binary) if binary else None
+        tool_source = str(source) if source else None
+
     return AuthStatus(
         provider=spec.name,
         model=model or config.model_for(None) or spec.default_model,
@@ -190,6 +209,8 @@ def status(
         backend_location=location,
         verified=verified,
         detail=detail,
+        tool_binary=tool_binary,
+        tool_source=tool_source,
     )
 
 

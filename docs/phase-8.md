@@ -7,9 +7,9 @@ touch the tree, and as an agent that may, under this project's rules.
 
 | Area | Modules |
 |---|---|
-| Provider | `ai/cursor.py` (`CursorProvider`: the local CLI driven headlessly, `--mode ask`, never `--force`), registered in `ai/registry.py` with aliases `cursor-agent`/`cursor-cli`/`composer` |
 | Delegation | `agents/cursor_agent.py` (`CursorAgentRunner`: rules → Cursor `permissions.deny`, merge/restore of `.cursor/cli.json`, post-hoc diff audit), `commands/delegate.py` |
-| Auth | `AuthMethod.TOOL` + `auth/methods.py::ToolAuthenticator` — a tool that holds its own session, with an optional key for CI |
+| Managed runtime | `tools/cursor.py` (`ManagedCursorCli`: version resolved from Cursor's own installer, pinned versioned artefact, atomic unpack under `~/.config/rn-agent/tools/`), `net/http.py` (`FileTransport`/`HttpxDownloader`) |
+| Provider | `ai/cursor.py` (`CursorProvider`: the local CLI driven headlessly, `--mode ask` + `--trust`, never `--force`), registered in `ai/registry.py` with aliases `cursor-agent`/`cursor-cli`/`composer` |
 | Contract | `AIProvider.requires_model` (an agent CLI has an account default; an HTTP API does not) |
 | CLI | `rn-agent delegate TASK` in `cli/develop.py`, `/delegate` in `tui/router.py` |
 | Wiring | `core/context.py` and `tui/session.py` pass `workspace`; `auth/manager.py` capability row |
@@ -64,19 +64,45 @@ Running `cursor-agent` through its documented interface is not the same act as
 reading the secret it stores — one is supported, the other is what
 `docs/authentication.md` forbids.
 
+**The CLI is a managed runtime, not a prerequisite.** Cursor's documented install
+pipes a script into a shell, unpacks into `~/.local/share`, symlinks into
+`~/.local/bin` and then tells you to edit your shell profile — three things this
+agent has no business doing to someone's machine. So `ManagedCursorCli` reads the
+version out of that same installer, downloads the same versioned artefact, and
+unpacks it under `~/.config/rn-agent/tools/`, invoked by absolute path. Nothing
+reaches `PATH` and no profile is touched.
+
+Two things are said plainly rather than glossed. Cursor publishes **no checksum**
+for these artefacts, so there is none to verify; HTTPS to their CDN plus a pinned,
+recorded version is the entire guarantee, and the archive is still unpacked as
+untrusted input. And the Cursor binary **self-updates**: running it may create its
+own `~/.local` symlinks, which rn-agent cannot switch off — so the lookup prefers
+any install already on the machine (`PATH`, then Cursor's own location, then ours)
+rather than downloading 75 MB a second time, and `whoami` names which of the three
+is in play.
+
 ## Verification
 
-* 762 pytest tests (up from 726), `ruff check src tests` clean, `mypy` clean on
-  136 source files
-* new suite: `test_cursor.py` (34)
-* **the read-only claim is proved, not asserted**: the test stub writes a file
-  only when `--force` is present, and the provider test then checks the project
-  directory is byte-for-byte unchanged. The stub's write branch was exercised
-  separately to confirm the test is not vacuous
+* 866 pytest tests (up from 726), `ruff check src tests` clean, `mypy` clean on
+  144 source files
+* new suite: `test_cursor.py` (66)
+* **the read-only claim is proved twice.** With a stub that writes a file only
+  when `--force` is present, the provider test checks the project directory is
+  byte-for-byte unchanged (and the stub's write branch was exercised separately,
+  so the test is not vacuous). Then against the **real signed-in binary**, asked
+  directly to create a file: *"I'm in Ask mode, so I can't create files or make
+  other changes"* — and the directory stayed empty.
 * the whole delegate loop was driven end to end against a stub that really edits
   files: clean-tree refusal, branch creation, deny-list write and restore, the
   violation path (native file → exit 1 → restore guidance), and `--allow-native`
   permitting the same edit at exit 0
+* the managed install was verified against Cursor's real CDN: version resolved
+  from the vendor's installer, 71 MiB fetched in 7.6 s, unpacked, `--version`
+  and `status --format json` both answered. The download and unpack paths are
+  then covered offline by a fake downloader serving a purpose-built tarball,
+  including a refusal of `../` traversal and of a package with no executable
+* the reported failure was reproduced at its exact size: a 155,260-character
+  prompt now answers, reporting 44,698 input / 70 output tokens
 
 ## Bugs found by the tests and fixed
 
@@ -100,6 +126,26 @@ reading the secret it stores — one is supported, the other is what
    *prompt* but wrong for an explicitly supplied key — it made the documented CI
    path (`CURSOR_API_KEY`) a no-op. An explicit `--api-key`/`--stdin` is now
    honoured whatever the provider requires.
+7. The prompt was passed as a command-line argument behind an invented
+   120,000-character cap, so a real `fix --about` on a real project failed with
+   "prompt is 155260 characters". The CLI reads the prompt from **stdin**, which
+   has no such ceiling — measured, not assumed — so the cap is gone. (`ARG_MAX`
+   on the machine that hit this was 1 MiB, so even the argv path had far more
+   room than the cap allowed.)
+8. `_parse_completion` hard-coded `Usage(0, 0)` with a comment claiming the CLI
+   reports duration and not tokens. It reports both: `usage.inputTokens` /
+   `usage.outputTokens`, verified at 44,698/70 on a real call. `/status`
+   accounting was silently blank for every Cursor request.
+9. Print mode requires `--trust`; without it the CLI prints a workspace-trust
+   notice and answers nothing. `--trust` grants directory trust only — it is not
+   `--force`, which is what auto-approves writes.
+10. `ToolAuthenticator.state()` reported `connected = True` unconditionally, so
+    Cursor looked connected on a machine with no CLI installed — and the model
+    picker then tried to discover models from a binary that was not there.
+    Presence is now checked (a PATH and directory lookup, no subprocess).
+11. The test suite read the developer's real `$HOME` looking for a vendor
+    install, so the same commit passed in CI and failed on a machine that had
+    Cursor. `conftest` now redirects `HOME` as well as `RN_AGENT_HOME`.
 
 ## Not implemented
 

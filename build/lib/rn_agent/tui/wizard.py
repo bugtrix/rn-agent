@@ -44,6 +44,7 @@ MIGRATE_FLAGS = (
     "allow-dirty",
     "no-branch",
     "no-install",
+    "no-check",
 )
 UPGRADE_FLAGS = (
     "deps",
@@ -196,7 +197,7 @@ def _confirm_and_migrate(
             ("git", _git_word(snapshot)),
             ("native steps", "skipped" if options.get("skip-native") else "included"),
             ("builds", "yes" if options.get("build") else "no (--build to run them)"),
-            ("ai repair", "off" if options.get("no-ai") else "on failure, with your consent"),
+            ("ai repair", "off" if options.get("no-ai") else "on failure, asked once"),
         ]
     )
     if snapshot.git_dirty:

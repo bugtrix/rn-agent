@@ -14,6 +14,7 @@ than looking ready and failing on the first request.
 
 from __future__ import annotations
 
+from prompt_toolkit.formatted_text import FormattedText
 from rich.box import ROUNDED
 from rich.console import Group
 from rich.markup import escape
@@ -25,7 +26,7 @@ from ..cli import ui
 from ..constants import APP_TITLE, APP_VERSION
 from .session import StatusSnapshot
 
-TAGLINE = "React Native AI Engineering Agent"
+TAGLINE = "Type any prompt — like an IDE for this React Native project"
 SEPARATOR = " · "
 
 
@@ -124,7 +125,32 @@ def connect_hint(snapshot: StatusSnapshot) -> str:
 
 
 def help_hint() -> str:
-    return "/help for commands · /login to connect · Ctrl+K palette · Ctrl+D to exit"
+    return "Type any prompt to work on this project · /help · Ctrl+K palette · Ctrl+D to exit"
+
+
+def status_plain(snapshot: StatusSnapshot) -> str:
+    """Status bar without Rich markup, for the prompt toolbar."""
+    if not snapshot.provider:
+        return "AI not connected · /login"
+    if not snapshot.connected:
+        label = snapshot.provider_label or snapshot.provider
+        return f"{label} not connected · /login {snapshot.provider}"
+    parts: list[str] = [snapshot.provider_label or snapshot.provider]
+    parts.append(snapshot.model or "no model")
+    parts.append(f"RN {snapshot.rn_version}" if snapshot.rn_version else "RN unknown")
+    if snapshot.git_branch:
+        dirty = "*" if snapshot.git_dirty else ""
+        parts.append(f"{snapshot.git_branch}{dirty}")
+    elif snapshot.git_dirty:
+        parts.append("git dirty")
+    if snapshot.turns:
+        parts.append(f"{snapshot.turns} turns")
+    return " · ".join(parts)
+
+
+def toolbar_fragments(snapshot: StatusSnapshot) -> FormattedText:
+    """The prompt footer: provider, model, RN version, git."""
+    return FormattedText([("#6c6c6c", status_plain(snapshot))])
 
 
 def render_help(rows: list[tuple[str, str]], *, title: str = "Commands") -> None:
@@ -134,6 +160,12 @@ def render_help(rows: list[tuple[str, str]], *, title: str = "Commands") -> None
     what Rich reads as a style tag, and an unescaped one silently deletes the
     placeholder it is meant to document.
     """
+    ui.note(
+        "You do not need a slash command. Type a prompt like an IDE: rename a "
+        "screen, fix an error, add a file, or ask about this project. Files "
+        "apply after one confirm. Typecheck and tests stay off unless you pass "
+        "--check."
+    )
     ui.table(
         ["Command", "What it does"],
         [(escape(usage), summary) for usage, summary in rows],

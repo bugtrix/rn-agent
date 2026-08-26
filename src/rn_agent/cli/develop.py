@@ -20,7 +20,10 @@ FILE_HELP = (
     "Limit to this file or directory (repeatable). A native path is confirmation "
     "to edit that file without --allow-native."
 )
-CHECK_HELP = f"Validation step to run afterwards (repeatable): {', '.join(STEP_NAMES)}."
+CHECK_HELP = (
+    "Validation step to run afterwards (repeatable, off unless you pass this): "
+    f"{', '.join(STEP_NAMES)}."
+)
 
 
 def review(
@@ -75,7 +78,7 @@ def fix(
     ] = False,
     check: Annotated[list[str] | None, typer.Option("--check", help=CHECK_HELP)] = None,
     no_check: Annotated[
-        bool, typer.Option("--no-check", help="Skip validation after applying.")
+        bool, typer.Option("--no-check", help="Skip validation after applying (default).")
     ] = False,
     allow_native: Annotated[
         bool,
@@ -95,7 +98,7 @@ def fix(
         typer.Option("--keep", help="Keep the changes even when validation fails."),
     ] = False,
 ) -> None:
-    """Fix reported problems, then prove the project still builds."""
+    """Fix reported problems. Pass --check to typecheck or run tests afterwards."""
     from ..commands.fix import FixCommand
 
     context = build_context("fix")
@@ -106,7 +109,7 @@ def fix(
             files=as_tuple(file),
             instruction=about,
             changed=changed,
-            checks=resolve_checks(check, disabled=no_check, default=("typecheck", "tests")),
+            checks=resolve_checks(check, disabled=no_check, default=()),
             allow_native=allow_native,
             allow_dependencies=allow_deps,
             keep_on_failure=keep,
@@ -123,7 +126,7 @@ def feature(
     ] = False,
     check: Annotated[list[str] | None, typer.Option("--check", help=CHECK_HELP)] = None,
     no_check: Annotated[
-        bool, typer.Option("--no-check", help="Skip validation after applying.")
+        bool, typer.Option("--no-check", help="Skip validation after applying (default).")
     ] = False,
     keep: Annotated[
         bool, typer.Option("--keep", help="Keep the changes even when validation fails.")
@@ -139,7 +142,7 @@ def feature(
             description=description,
             files=as_tuple(file),
             allow_dependencies=allow_deps,
-            checks=resolve_checks(check, disabled=no_check, default=("typecheck",)),
+            checks=resolve_checks(check, disabled=no_check, default=()),
             keep_on_failure=keep,
             verbose=context.verbose,
         )
@@ -186,7 +189,7 @@ def delegate(
     ] = None,
     check: Annotated[list[str] | None, typer.Option("--check", help=CHECK_HELP)] = None,
     no_check: Annotated[
-        bool, typer.Option("--no-check", help="Skip validation after the agent runs.")
+        bool, typer.Option("--no-check", help="Skip validation after the agent runs (default).")
     ] = False,
     allow_native: Annotated[
         bool,
@@ -209,7 +212,7 @@ def delegate(
         float, typer.Option("--timeout", help="Seconds to let the agent run.")
     ] = 900.0,
 ) -> None:
-    """Hand a task to the Cursor agent, then audit and validate what it changed."""
+    """Hand a task to the Cursor agent, then audit what it changed."""
     from ..commands.delegate import DelegateCommand
 
     context = build_context("delegate")
@@ -218,7 +221,7 @@ def delegate(
             context,
             task=task,
             model=model,
-            checks=resolve_checks(check, disabled=no_check, default=("typecheck", "tests")),
+            checks=resolve_checks(check, disabled=no_check, default=()),
             allow_native=allow_native,
             allow_dependencies=allow_deps,
             allow_dirty=allow_dirty,

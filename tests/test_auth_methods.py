@@ -657,6 +657,9 @@ def test_tool_login_opens_the_cli_sign_in_page():
         tool="Cursor CLI",
         sign_in_command="cursor-agent login",
         launcher=lambda **kwargs: calls.append(kwargs),
+        # The tool is on this machine; without a probe it is honestly reported as
+        # absent, which is a different test below.
+        probe=lambda: True,
     )
 
     outcome = authenticator.login(skip_launch=False)
@@ -665,6 +668,16 @@ def test_tool_login_opens_the_cli_sign_in_page():
     assert outcome.stored is False
     assert outcome.warnings == ()
     assert outcome.state.connected is True
+
+
+def test_a_tool_with_no_probe_is_reported_absent_not_connected():
+    """The default must be "cannot prove it is there", never a cheerful guess."""
+    authenticator = ToolAuthenticator(provider="cursor", tool="Cursor CLI")
+
+    state = authenticator.state()
+
+    assert state.connected is False
+    assert "not installed" in (state.label or "")
 
 
 def test_tool_login_skips_the_browser_when_asked():

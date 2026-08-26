@@ -264,6 +264,8 @@ class AuthenticationManager:
 
         if entry.method is AuthMethod.TOOL:
             # The tool owns the session; rn-agent only ever holds an optional key.
+            from ..tools.cursor import resolve_binary
+
             return ToolAuthenticator(
                 provider=entry.provider,
                 api_key=api_key,
@@ -271,6 +273,9 @@ class AuthenticationManager:
                 sign_in_command=f"{entry.provider}-agent login",
                 detail=entry.detail,
                 docs_url=entry.docs_url,
+                # Presence only: a PATH and directory lookup, no subprocess. It is
+                # what stops `/model` asking a CLI that is not installed.
+                probe=lambda: resolve_binary() is not None,
                 logger=self.logger,
             )
 

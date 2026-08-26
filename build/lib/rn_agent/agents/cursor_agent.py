@@ -237,13 +237,16 @@ class CursorAgentRunner:
 
     def run(self, task: str) -> tuple[str, int]:
         """Execute the agent. Returns its summary text and the duration."""
-        result = self.runner.run(
-            self.argv(self.prompt(task)),
-            cwd=self.root,
-            timeout=self.timeout,
-            env={"CURSOR_API_KEY": self.credential} if self.credential else None,
-            force=True,
-        )
+        from ..cli.working import working
+
+        with working():
+            result = self.runner.run(
+                self.argv(self.prompt(task)),
+                cwd=self.root,
+                timeout=self.timeout,
+                env={"CURSOR_API_KEY": self.credential} if self.credential else None,
+                force=True,
+            )
         if result.timed_out:
             raise RNAgentError(
                 f"the Cursor agent did not finish within {self.timeout:.0f}s",

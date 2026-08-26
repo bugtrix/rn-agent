@@ -2,9 +2,9 @@
 
 The value is not "an LLM wrote a screen". It is that the model is handed the
 project's inferred architecture and its ``rules.yaml`` before it is asked for
-anything, the answer is screened against those rules, and the result is
-typechecked - so a project on Redux Saga does not get handed React Query, and a
-feature that does not compile does not survive the run.
+anything, and the answer is screened against those rules - so a project on
+Redux Saga does not get handed React Query. Pass ``--check`` if you want a
+typecheck after the apply.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class FeatureCommand(AgentCommand[FeatureAnalysis, FeaturePlan]):
         description: str = "",
         files: tuple[str, ...] = (),
         allow_dependencies: bool = False,
-        checks: tuple[str, ...] = ("typecheck",),
+        checks: tuple[str, ...] = (),
         keep_on_failure: bool = False,
         verbose: bool = False,
     ) -> None:
@@ -209,7 +209,7 @@ class FeatureCommand(AgentCommand[FeatureAnalysis, FeaturePlan]):
             ui.note("re-run with --keep to inspect it, or narrow the request")
             return
         if self.validation is not None and not self.validation.ok:
-            ui.failure("the feature does not compile; the files were kept (--keep)")
+            ui.failure("the feature does not compile; the files were kept")
             return
         if self.report.applied:
             ui.success(f"{len(self.report.applied)} file(s) written")

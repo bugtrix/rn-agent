@@ -40,6 +40,8 @@ STYLE_RULES: dict[str, str] = {
     "status.muted": "#6c6c6c",
     "prompt.arrow": "bold #00d75f",
     "prompt.slash": "#87afff",
+    "prompt.placeholder": "#585858",
+    "bottom-toolbar": "bg:#1c1c1c #6c6c6c",
 }
 
 

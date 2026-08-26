@@ -281,7 +281,7 @@ class TestCommand(AgentCommand[TestAnalysis, TestPlan]):
             ui.note("re-run with --keep to inspect them")
             return
         if self.validation is not None and not self.validation.ok:
-            ui.failure("the generated tests fail; they were kept (--keep)")
+            ui.failure("the generated tests fail; they were kept")
             return
         if self.report.applied and self.validation is not None:
             ui.success(f"{len(self.report.applied)} test file(s) written and passing")
